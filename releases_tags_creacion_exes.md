@@ -25,7 +25,7 @@ git push origin v4.0.2
 - **En un PR** que toque la spec, los requirements o el propio workflow, se compila y se pasa el smoke, pero no se publica. El EXE queda como artefacto del run durante 30 días.
 
 Cuando la versión esté validada en equipos reales, márcala como definitiva:
-- desde Actions → «Mantenimiento de releases» → «Run workflow», con su etiqueta en «definitiva» (el mismo workflow borra una release antigua con «borrar», conservando la etiqueta);
+- desde Actions → «Mantenimiento de releases» → «Run workflow», con su etiqueta en «definitiva» (el mismo workflow borra una release antigua con «borrar», conservando la etiqueta); y con «borrar_ramas» borra ramas ya fusionadas, sólo si no tienen commits fuera de `main`);
 - en GitHub: Releases → editar → desmarcar «Set as a pre-release»;
 - o con `gh release edit v4.0.2 --prerelease=false --latest`.
 
