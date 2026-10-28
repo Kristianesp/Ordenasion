@@ -20,7 +20,7 @@ import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from PyQt6.QtCore import QThread, pyqtSignal
 

@@ -5,10 +5,9 @@ Optimizado para manejar grandes cantidades de datos sin congelar la UI
 """
 
 from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex, QVariant
-from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import QApplication
 from typing import List, Dict, Any, Optional
-from pathlib import Path
 from datetime import datetime
 
 

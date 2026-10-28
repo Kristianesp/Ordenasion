@@ -46,9 +46,9 @@ from src.core.image_similarity import SimilarImagesWorker
 from src.core.transaction_manager import TransactionManager
 from src.gui.duplicates_actions_ui import DuplicatesActionsMixin
 from src.gui.duplicates_columns import DuplicatesColumnsMixin
-from src.gui.duplicates_preview import DuplicatesPreviewMixin, format_file_size  # noqa: F401
+from src.gui.duplicates_preview import DuplicatesPreviewMixin
 from src.gui.modern_components import TabHeaderWidget
-from src.gui.table_models import PaginatedDuplicatesModel, VirtualizedDuplicatesModel  # noqa: F401
+from src.gui.table_models import PaginatedDuplicatesModel
 from src.gui.task_center import TaskCenterDialog, task_registry
 from src.gui.v2.theme import ElidedPathLabel, apply_control_sizes, apply_menu_surface, typography_scale
 from src.utils.app_config import AppConfig

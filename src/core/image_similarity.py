@@ -10,10 +10,9 @@ unión de conjuntos).  Los grupos son *parecidos*, no idénticos.
 
 from __future__ import annotations
 
-import os
 import threading
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QImageReader
