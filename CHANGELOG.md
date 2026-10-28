@@ -1,5 +1,18 @@
 # Cambios de Ordenasion
 
+## 4.0.2 — 2026-10-28
+
+1. **Los errores ya no cierran la aplicación en silencio:**
+   - Una excepción inesperada muestra un aviso con el detalle y la ruta de los registros, y la aplicación sigue abierta.
+   - Si la sesión anterior terminó de golpe, al arrancar se avisa y se ofrece abrir la carpeta de registros con el informe (`fallo-grave-anterior.txt`).
+2. **Organizar se prueba de punta a punta en Windows real:** la CI recorre la ventana igual que un usuario, con la plataforma gráfica real y sobre los dos ejecutables:
+   - analizar y marcar «Todo»;
+   - «Revisar y organizar», marcar la casilla de confirmación y pulsar «Confirmar»;
+   - cerrar el resumen y deshacer.
+
+   Se puede repetir con `ORDENASION_E2E=1` o `tools/e2e_organize.py`.
+3. **Más casos verificados:** con fecha y duplicados, las tres políticas de conflicto, destinos existentes, nombres con tildes y emojis, configuración heredada de la 3.5 y 3.000 archivos.
+
 ## 4.0.1 — 2026-10-28
 
 1. **El ejecutable vuelve a abrirse siempre:**

@@ -18,8 +18,8 @@ ROOT = Path(main_fluent.__file__).resolve().parent
 
 
 def test_release_version_and_spec_use_fluent_assets_without_private_data():
-    assert APP_VERSION == "4.0.1" and VERSION_INFO == (4, 0, 1, 0)
-    assert EXECUTABLE_NAME == "Ordenasion_v4.0.1"
+    assert APP_VERSION == "4.0.2" and VERSION_INFO == (4, 0, 2, 0)
+    assert EXECUTABLE_NAME == "Ordenasion_v4.0.2"
     calls = {}
 
     def analysis(*args, **kwargs):
@@ -65,7 +65,7 @@ def test_release_version_and_spec_use_fluent_assets_without_private_data():
     assert {"branding", "fonts", "design-tokens.json", "LICENSE"} <= set(included)
     assert not {"app_config.json", "organization_profiles.json", "categories_config.json"} & set(included)
     pe = Path(calls["exe"]["version"]).read_text(encoding="utf-8")
-    assert "filevers=(4, 0, 1, 0)" in pe and "Ordenasion_v4.0.1.exe" in pe
+    assert "filevers=(4, 0, 2, 0)" in pe and "Ordenasion_v4.0.2.exe" in pe
 
 
 def test_onedir_spec_collects_portable_folder(monkeypatch):

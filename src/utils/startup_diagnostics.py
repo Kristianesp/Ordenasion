@@ -7,6 +7,8 @@
   se quedó parado, sin adivinar.
 - Los fallos graves del intérprete (access violation, etc.) quedan en
   ``logs/fallo-grave.txt`` y las excepciones no capturadas en el log.
+- Una excepción no capturada muestra un aviso (la app sigue abierta) y, si la
+  sesión anterior terminó de golpe, al arrancar se ofrece abrir el informe.
 
 No importa Qt: se puede llamar antes de crear la QApplication.
 """
@@ -24,8 +26,13 @@ from src.utils.version import APP_VERSION
 HANG_SECONDS = 20
 HANG_FILE = "arranque-bloqueado.txt"
 CRASH_FILE = "fallo-grave.txt"
+# Existe mientras la app está abierta: si sigue ahí al arrancar, la sesión
+# anterior terminó de golpe. (El contenido de fallo-grave.txt no basta: en
+# Windows faulthandler también anota excepciones COM que no son fallos.)
+SESSION_MARKER = "sesion-en-curso"
 
-_state = {"t0": None, "hang": None, "crash": None, "done": False}
+_state = {"t0": None, "hang": None, "crash": None, "done": False,
+          "previous_crash": None, "error_shown": False}
 
 
 def _elapsed() -> float:
@@ -45,6 +52,14 @@ def begin() -> None:
                 platform.python_version(), platform.platform())
     try:
         folder = log_directory()
+        marker = folder / SESSION_MARKER
+        if marker.exists():
+            crash = folder / CRASH_FILE
+            _state["previous_crash"] = {
+                "details": crash.read_text(encoding="utf-8", errors="replace")[-4000:] if crash.exists() else "",
+            }
+            logger.warning("La sesión anterior de Ordenasion terminó de forma inesperada")
+        marker.write_text(APP_VERSION, encoding="utf-8")
         _keep_previous(folder / CRASH_FILE)
         _keep_previous(folder / HANG_FILE)
         _state["crash"] = open(folder / CRASH_FILE, "w", encoding="utf-8")
@@ -59,6 +74,7 @@ def begin() -> None:
     def log_uncaught(exc_type, exc, tb):
         get_logger().critical("Excepción no capturada", exc_info=(exc_type, exc, tb))
         previous_hook(exc_type, exc, tb)
+        _show_error_later(exc_type, exc)
 
     sys.excepthook = log_uncaught
 
@@ -86,6 +102,61 @@ def finish(revealed_by_fallback: bool = False) -> None:
     get_logger().info("Arranque: ventana visible %s en %.2f s", how, _elapsed())
     _discard(_state.pop("hang", None), HANG_FILE)
     _state["hang"] = None
+    if _state["previous_crash"] is not None:
+        _call_on_gui_thread(_show_previous_crash, delay_ms=600)
+
+
+def _call_on_gui_thread(callback, delay_ms: int = 0) -> None:
+    """Ejecuta ``callback`` en el hilo de la interfaz (si hay QApplication)."""
+    try:
+        from PyQt6.QtCore import QThread, QTimer
+        from PyQt6.QtWidgets import QApplication
+    except ImportError:
+        return
+    app = QApplication.instance()
+    if app is None or QThread.currentThread() is not app.thread():
+        return  # desde otro hilo basta con el registro
+    QTimer.singleShot(delay_ms, callback)
+
+
+def _show_error_later(exc_type, exc) -> None:
+    """Avisa (una vez por sesión) en lugar de fallar en silencio."""
+    if _state["error_shown"] or os.environ.get("ORDENASION_SMOKE") == "1" or os.environ.get("ORDENASION_E2E") == "1":
+        return
+    _state["error_shown"] = True
+    text = f"{exc_type.__name__}: {exc}"
+    _call_on_gui_thread(lambda: _report_dialog(
+        "Ordenasion encontró un error",
+        "Se produjo un error inesperado. La aplicación sigue abierta, pero la última acción "
+        "puede no haberse completado.",
+        text))
+
+
+def _show_previous_crash() -> None:
+    details = (_state["previous_crash"] or {}).get("details", "").strip()
+    _report_dialog(
+        "Ordenasion se cerró inesperadamente",
+        "La última vez Ordenasion se cerró de forma inesperada. Se ha guardado un informe "
+        "en la carpeta de registros; envíalo para poder corregir el fallo.",
+        details[-1500:] if details else "")
+
+
+def _report_dialog(title: str, message: str, details: str) -> None:
+    from PyQt6.QtWidgets import QApplication, QMessageBox
+
+    box = QMessageBox(QApplication.activeWindow())
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle(title)
+    box.setText(message + f"\n\nRegistros: {log_directory()}")
+    if details:
+        box.setDetailedText(details)
+    open_button = box.addButton("Abrir carpeta de registros", QMessageBox.ButtonRole.ActionRole)
+    box.addButton("Cerrar", QMessageBox.ButtonRole.RejectRole)
+    box.exec()
+    if box.clickedButton() is open_button:
+        from src.utils.paths import open_in_file_manager
+
+        open_in_file_manager(log_directory())
 
 
 def _discard(handle, name: str) -> None:
@@ -103,6 +174,10 @@ def _discard(handle, name: str) -> None:
 def shutdown() -> None:
     """Al salir: si no hubo fallo grave, quita el archivo vacío."""
     faulthandler.cancel_dump_traceback_later()
+    try:
+        (log_directory() / SESSION_MARKER).unlink(missing_ok=True)
+    except OSError:
+        pass
     crash: Optional[object] = _state.get("crash")
     if crash is not None:
         try:

@@ -1,6 +1,6 @@
-# Guía de compilación del ejecutable — Ordenasion 4.0.1
+# Guía de compilación del ejecutable — Ordenasion 4.0.2
 
-Esta guía explica cómo se genera `Ordenasion_v4.0.1.exe` y qué hay que vigilar
+Esta guía explica cómo se genera `Ordenasion_v4.0.2.exe` y qué hay que vigilar
 para que el ejecutable siga siendo pequeño, arranque bien y no se lleve datos
 personales. El procedimiento paso a paso de una release (comandos exactos,
 smoke del EXE y publicación) está en
@@ -14,7 +14,7 @@ smoke del EXE y publicación) está en
 |---|---|
 | Punto de entrada | `main_fluent.py` (el único; `main.py` y `main_optimized.py` ya no existen) |
 | Spec de PyInstaller | `OrganizadorAlpha_OPTIMIZED.spec` (la única) |
-| Resultado | `Ordenasion_v4.0.1.exe` (onefile, sin consola, con imagen de carga) y, con `ORDENASION_ONEDIR=1`, la carpeta portable `Ordenasion_v4.0.1\` |
+| Resultado | `Ordenasion_v4.0.2.exe` (onefile, sin consola, con imagen de carga) y, con `ORDENASION_ONEDIR=1`, la carpeta portable `Ordenasion_v4.0.2\` |
 | Nombre y versión | Salen de `src/utils/version.py` (`EXECUTABLE_NAME`, `APP_VERSION`) |
 | Metadatos PE | `packaging/windows_version_info.txt` |
 | Herramientas de build | `requirements-build.txt` (PyInstaller y hooks fijados) |
@@ -44,7 +44,7 @@ $env:ORDENASION_ONEDIR = "1"
 Remove-Item Env:ORDENASION_ONEDIR
 ```
 
-El ejecutable queda en `dist\Ordenasion_v4.0.1.exe`. Para una release usa los
+El ejecutable queda en `dist\Ordenasion_v4.0.2.exe`. Para una release usa los
 directorios propios por versión (`--distpath`/`--workpath`) y el `PATH` acotado
 que se describen en `releases_tags_creacion_exes.md`.
 
@@ -110,9 +110,9 @@ archivos que encuentre junto al ejecutable o en el directorio de trabajo
 
 ## 5. Comprobaciones después de compilar
 
-- [ ] `dist\Ordenasion_v4.0.1.exe` existe; anota tamaño y SHA-256 (no hay un
+- [ ] `dist\Ordenasion_v4.0.2.exe` existe; anota tamaño y SHA-256 (no hay un
       límite fijo, pero un salto grande indica una dependencia nueva).
-- [ ] Propiedades del archivo → Detalles: versión 4.0.1 e icono correctos.
+- [ ] Propiedades del archivo → Detalles: versión 4.0.2 e icono correctos.
 - [ ] El smoke aislado (`ORDENASION_SMOKE=1`) termina con código 0 y el JSON
       dice `status=ok` (comandos en `releases_tags_creacion_exes.md`).
 - [ ] Al abrirlo normalmente: splash, ventana Fluent, todas las páginas abren,

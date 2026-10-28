@@ -133,4 +133,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        exit_code = main()
+    finally:
+        # También en los modos smoke/E2E: quita la marca de sesión en curso
+        startup_diagnostics.shutdown()
+    raise SystemExit(exit_code)
