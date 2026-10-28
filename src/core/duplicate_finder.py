@@ -129,6 +129,48 @@ class FileEntry:
     identity: Optional[Tuple[int, int]] = None
 
 
+def walk_files(folder_path, recursive: bool = True, cancel_event=None,
+               errors: Optional[List[Tuple[str, str]]] = None) -> Iterable["FileEntry"]:
+    """Recorre ``folder_path`` con ``os.scandir`` (un stat por archivo).
+
+    Omite carpetas ocultas, de cuarentena y del sistema por debajo de la raíz,
+    enlaces simbólicos y junctions.  Lanza :class:`ScanCancelled` si se cancela.
+    """
+    stack = [str(Path(folder_path))]
+    while stack:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ScanCancelled()
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                entries = list(it)
+        except OSError as exc:
+            if errors is not None:
+                errors.append((current, f"carpeta no accesible: {exc.strerror or exc}"))
+            continue
+        for entry in entries:
+            name = entry.name
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if not recursive or is_excluded_component(name):
+                        continue
+                    if hasattr(entry, "is_junction") and entry.is_junction():
+                        continue
+                    if os.path.normcase(entry.path) in SYSTEM_DIRS:
+                        continue
+                    stack.append(entry.path)
+                    continue
+                if not entry.is_file(follow_symlinks=False) or is_excluded_file_name(name):
+                    continue
+                st = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                if errors is not None:
+                    errors.append((entry.path, f"no accesible: {exc.strerror or exc}"))
+                continue
+            identity = (st.st_dev, st.st_ino) if st.st_ino else None
+            yield FileEntry(Path(entry.path), st.st_size, st.st_mtime, identity)
+
+
 @dataclass
 class GroupMeta:
     """Información de un grupo de duplicados."""
@@ -197,41 +239,7 @@ class DuplicateFinder:
     # ------------------------------------------------------------------ enumeración
     def iter_files(self, folder_path: Path, recursive: bool = True) -> Iterable[FileEntry]:
         """Recorre la carpeta con ``os.scandir`` (un stat por archivo)."""
-        root = Path(folder_path)
-        stack = [str(root)]
-        while stack:
-            self._check_cancel()
-            current = stack.pop()
-            try:
-                with os.scandir(current) as it:
-                    entries = list(it)
-            except OSError as exc:
-                self.errors.append((current, f"carpeta no accesible: {exc.strerror or exc}"))
-                continue
-            for entry in entries:
-                name = entry.name
-                try:
-                    if entry.is_dir(follow_symlinks=False):
-                        if not recursive:
-                            continue
-                        if is_excluded_component(name):
-                            continue
-                        if hasattr(entry, "is_junction") and entry.is_junction():
-                            continue
-                        if os.path.normcase(entry.path) in SYSTEM_DIRS:
-                            continue
-                        stack.append(entry.path)
-                        continue
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                    if is_excluded_file_name(name):
-                        continue
-                    st = entry.stat(follow_symlinks=False)
-                except OSError as exc:
-                    self.errors.append((entry.path, f"no accesible: {exc.strerror or exc}"))
-                    continue
-                identity = (st.st_dev, st.st_ino) if st.st_ino else None
-                yield FileEntry(Path(entry.path), st.st_size, st.st_mtime, identity)
+        return walk_files(folder_path, recursive, cancel_event=self.cancel_event, errors=self.errors)
 
     def _get_all_files(self, folder_path: Path, recursive: bool = True) -> List[Path]:
         return [entry.path for entry in self.iter_files(Path(folder_path), recursive)]

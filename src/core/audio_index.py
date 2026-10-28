@@ -16,7 +16,9 @@ import base64
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
+
+from src.utils.logger import debug
 
 
 @dataclass
@@ -232,12 +234,13 @@ class AudioMetadataService:
             metadata.bit_depth = getattr(info, "bits_per_sample", None)
 
             tags = self._read_tags(audio)
-            try:
-                easy_audio = MutagenFile(str(file_path), easy=True)
-                if easy_audio is not None:
-                    tags = {**tags, **self._read_tags(easy_audio)}
-            except Exception:
-                pass
+            if self._needs_easy_tags(audio):
+                try:
+                    easy_audio = MutagenFile(str(file_path), easy=True)
+                    if easy_audio is not None:
+                        tags = {**tags, **self._read_tags(easy_audio)}
+                except Exception as exc:  # mutagen lanza tipos variados por formato
+                    debug(f"Tags 'easy' no disponibles para {file_path.name}: {exc}")
             metadata.tags = tags
             metadata.artist = tags.get("artist", "")
             metadata.album_artist = tags.get("albumartist", "") or tags.get(
@@ -258,6 +261,21 @@ class AudioMetadataService:
         except Exception as exc:
             metadata.error = str(exc)
             return metadata
+
+    @staticmethod
+    def _needs_easy_tags(audio) -> bool:
+        """Los comentarios Vorbis (FLAC/OGG/Opus) ya son legibles: no hace falta reabrir."""
+        tags = getattr(audio, "tags", None)
+        if tags is None:
+            return False
+        try:
+            from mutagen._vorbis import VComment
+
+            if isinstance(tags, VComment):
+                return False
+        except ImportError:
+            pass
+        return True
 
     def _read_tags(self, audio) -> Dict[str, str]:
         tags: Dict[str, str] = {}
@@ -823,8 +841,8 @@ class AudioMetadataService:
             return "image/jpeg"
         return "image/jpeg"
 
-    def list_tracks(self, limit: int = 500) -> list[Dict[str, Any]]:
-        """Lista todas las pistas indexadas para exploracion y edicion."""
+    def list_tracks(self, limit: Optional[int] = 500) -> list[Dict[str, Any]]:
+        """Lista las pistas indexadas (``limit`` None o 0 = todas)."""
         query = """
             SELECT t.*, COALESCE(r.review_status, '') AS review_status,
                    COALESCE(r.reviewed_at, '') AS reviewed_at
@@ -837,7 +855,7 @@ class AudioMetadataService:
             with self.lock:
                 conn = self._get_connection()
                 try:
-                    rows = conn.execute(query, (limit,)).fetchall()
+                    rows = conn.execute(query, (limit if limit and limit > 0 else -1,)).fetchall()
                     results = []
                     for row in rows:
                         item = dict(row)
@@ -982,19 +1000,169 @@ class AudioMetadataService:
         except Exception:
             return False
 
-    def index_folder(self, folder_path: Path, recursive: bool = True) -> int:
-        """Indexa todos los archivos de audio de una carpeta."""
+    def iter_audio_files(self, folder_path: Path, recursive: bool = True, cancel_event=None):
+        """Archivos de audio de la carpeta, sin carpetas ocultas/cuarentena/sistema."""
+        from src.core.duplicate_finder import walk_files
+
+        for entry in walk_files(Path(folder_path), recursive, cancel_event=cancel_event):
+            if self.is_audio_file(entry.path):
+                yield entry
+
+    def _row_to_metadata(self, row: Dict[str, Any]) -> AudioMetadata:
+        tags = row.get("tags") or {}
+        if isinstance(tags, str):
+            try:
+                tags = json.loads(tags or "{}")
+            except ValueError:
+                tags = {}
+        return AudioMetadata(
+            file_path=str(row.get("file_path") or ""),
+            file_size=int(row.get("file_size") or 0),
+            mtime=float(row.get("mtime") or 0.0),
+            extension=str(row.get("extension") or ""),
+            codec=str(row.get("codec") or "unknown"),
+            duration=row.get("duration"),
+            bitrate=row.get("bitrate"),
+            sample_rate=row.get("sample_rate"),
+            channels=row.get("channels"),
+            bit_depth=row.get("bit_depth"),
+            lossless=bool(row.get("lossless")),
+            artist=str(row.get("artist") or ""),
+            album_artist=str(row.get("album_artist") or ""),
+            title=str(row.get("title") or ""),
+            album=str(row.get("album") or ""),
+            track_number=str(row.get("track_number") or ""),
+            disc_number=str(row.get("disc_number") or ""),
+            year=str(row.get("year") or ""),
+            genre=str(row.get("genre") or ""),
+            tags=dict(tags),
+            source=str(row.get("source") or "local"),
+            error=str(row.get("error") or ""),
+        )
+
+    def _load_rows(self, file_paths: List[str]) -> Dict[str, Dict[str, Any]]:
+        rows: Dict[str, Dict[str, Any]] = {}
+        if not file_paths:
+            return rows
+        try:
+            with self.lock:
+                conn = self._get_connection()
+                try:
+                    for start in range(0, len(file_paths), 500):
+                        chunk = file_paths[start:start + 500]
+                        placeholders = ",".join("?" * len(chunk))
+                        for row in conn.execute(
+                            f"SELECT * FROM audio_tracks WHERE file_path IN ({placeholders})", chunk
+                        ).fetchall():
+                            rows[row["file_path"]] = dict(row)
+                finally:
+                    conn.close()
+        except sqlite3.Error as exc:
+            debug(f"No se pudo leer el índice de audio: {exc}")
+        return rows
+
+    def upsert_many(self, items: Iterable[AudioMetadata]) -> int:
+        """Guarda varias pistas en una sola transacción."""
+        records = []
+        for metadata in items:
+            record = metadata.to_record()
+            record["lossless"] = 1 if metadata.lossless else 0
+            records.append(record)
+        if not records:
+            return 0
+        try:
+            with self.lock:
+                conn = self._get_connection()
+                try:
+                    with conn:
+                        conn.executemany(
+                            """
+                            INSERT OR REPLACE INTO audio_tracks (
+                                file_path, file_size, mtime, extension, codec, duration,
+                                bitrate, sample_rate, channels, bit_depth, lossless,
+                                artist, album_artist, title, album, track_number,
+                                disc_number, year, genre, tags, source, error, indexed_at
+                            ) VALUES (
+                                :file_path, :file_size, :mtime, :extension, :codec, :duration,
+                                :bitrate, :sample_rate, :channels, :bit_depth, :lossless,
+                                :artist, :album_artist, :title, :album, :track_number,
+                                :disc_number, :year, :genre, :tags, :source, :error, :indexed_at
+                            )
+                            """,
+                            records,
+                        )
+                finally:
+                    conn.close()
+            return len(records)
+        except sqlite3.Error as exc:
+            debug(f"No se pudo guardar el índice de audio: {exc}")
+            return 0
+
+    def index_folder_detailed(
+        self,
+        folder_path: Path,
+        recursive: bool = True,
+        cancel_event=None,
+        progress: Optional[Callable[[int, int], None]] = None,
+    ) -> List[AudioMetadata]:
+        """Indexa la carpeta y devuelve los metadatos de cada pista.
+
+        Cada pista se analiza con mutagen una sola vez; las que no cambiaron
+        (mismo tamaño y mtime) se reutilizan del índice sin abrir el archivo.
+        """
         folder_path = Path(folder_path)
         if not folder_path.exists():
+            return []
+        entries = list(self.iter_audio_files(folder_path, recursive, cancel_event))
+        known = self._load_rows([str(entry.path) for entry in entries])
+        results: List[AudioMetadata] = []
+        pending: List[AudioMetadata] = []
+        total = len(entries)
+        for index, entry in enumerate(entries, start=1):
+            if cancel_event is not None and cancel_event.is_set():
+                from src.core.duplicate_finder import ScanCancelled
+
+                self.upsert_many(pending)
+                raise ScanCancelled()
+            row = known.get(str(entry.path))
+            if (
+                row
+                and int(row.get("file_size") or -1) == entry.size
+                and float(row.get("mtime") or -1) == entry.mtime
+                and str(row.get("error") or "") != "mutagen_no_disponible"
+            ):
+                results.append(self._row_to_metadata(row))
+            else:
+                meta = self.extract_metadata(entry.path)
+                results.append(meta)
+                if meta.error != "mutagen_no_disponible":
+                    pending.append(meta)
+                if len(pending) >= 200:
+                    self.upsert_many(pending)
+                    pending = []
+            if progress and (index % 25 == 0 or index == total):
+                progress(index, total)
+        self.upsert_many(pending)
+        return results
+
+    def index_folder(self, folder_path: Path, recursive: bool = True) -> int:
+        """Indexa todos los archivos de audio de una carpeta (devuelve cuántos)."""
+        return sum(
+            1
+            for meta in self.index_folder_detailed(folder_path, recursive=recursive)
+            if meta.error != "mutagen_no_disponible"
+        )
+
+    def count_tracks(self) -> int:
+        try:
+            with self.lock:
+                conn = self._get_connection()
+                try:
+                    return int(conn.execute("SELECT COUNT(*) FROM audio_tracks").fetchone()[0])
+                finally:
+                    conn.close()
+        except sqlite3.Error:
             return 0
-        count = 0
-        iterator = folder_path.rglob("*") if recursive else folder_path.iterdir()
-        for file_path in iterator:
-            if file_path.is_file() and self.is_audio_file(file_path):
-                meta = self.extract_metadata(file_path)
-                if self.upsert_metadata(meta):
-                    count += 1
-        return count
 
 
 audio_metadata_service = AudioMetadataService()
