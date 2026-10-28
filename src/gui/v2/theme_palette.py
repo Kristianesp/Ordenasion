@@ -219,7 +219,16 @@ def apply_fluent_theme(config: AppConfig) -> FluentTokens:
     if theme == Theme.AUTO:
         qconfig.theme = Theme.AUTO  # vuelve a detectar el esquema del sistema
     if color_changed or isDarkTheme() != previous_dark or not getattr(apply_fluent_theme, "_applied", False):
-        updateStyleSheet(lazy=getattr(apply_fluent_theme, "_applied", False))
+        lazy = getattr(apply_fluent_theme, "_applied", False)
+        try:
+            updateStyleSheet(lazy=lazy)
+        except RuntimeError:
+            # qfluentwidgets recorre un WeakKeyDictionary: si el recolector
+            # libera widgets (diálogos cerrados) a mitad, se reintenta una vez.
+            import gc
+
+            gc.collect()
+            updateStyleSheet(lazy=lazy)
         qconfig.themeChangedFinished.emit()
     apply_fluent_theme._applied = True
 
