@@ -3,6 +3,11 @@ import os
 from src.utils.app_config import AppConfig
 
 
+def native(path):
+    """Las rutas se guardan con los separadores del sistema."""
+    return os.path.normpath(path)
+
+
 def test_app_config_persists_path_memory_and_exclusions(tmp_path):
     config = AppConfig(str(tmp_path / "app_config.json"))
 
@@ -16,12 +21,12 @@ def test_app_config_persists_path_memory_and_exclusions(tmp_path):
 
     reloaded = AppConfig(str(tmp_path / "app_config.json"))
     assert reloaded.get_ignored_extensions() == [".bak", ".log", ".tmp"]
-    assert reloaded.get_ignored_paths() == ["/tmp/cache", "/tmp/cache/sub"]
-    assert reloaded.get_protected_paths() == ["/home/user/Documents"]
+    assert reloaded.get_ignored_paths() == [native("/tmp/cache"), native("/tmp/cache/sub")]
+    assert reloaded.get_protected_paths() == [native("/home/user/Documents")]
     assert reloaded.get_min_file_size_mb() == 25
     assert reloaded.get_ui_advanced_mode() is True
-    assert reloaded.get_favorite_paths() == ["/data/media"]
-    assert reloaded.get_recent_paths()[0] == "/data/downloads"
+    assert reloaded.get_favorite_paths() == [native("/data/media")]
+    assert reloaded.get_recent_paths()[0] == native("/data/downloads")
 
 
 def test_app_config_persists_duplicate_preferences(tmp_path):
@@ -47,7 +52,7 @@ def test_app_config_persists_audio_settings(tmp_path):
 
     reloaded = AppConfig(str(tmp_path / "app_config.json"))
     assert reloaded.get_auto_analyze() is False
-    assert reloaded.get_audio_library_roots() == ["/music"]
+    assert reloaded.get_audio_library_roots() == [native("/music")]
     assert reloaded.get_audio_duplicate_policy() == "quarantine"
     assert reloaded.get_music_preview_playback_rate() == 1.25
 
