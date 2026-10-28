@@ -1,0 +1,52 @@
+name: Mantenimiento de releases
+
+# Ejecución manual: borra una release (conserva su etiqueta en el historial)
+# y/o marca otra como versión definitiva («Latest»).
+on:
+  workflow_dispatch:
+    inputs:
+      borrar:
+        description: "Etiqueta de la release a borrar (p. ej. v4.0.0); vacío para no borrar"
+        type: string
+        default: ""
+      definitiva:
+        description: "Etiqueta de la release a marcar como definitiva (Latest); vacío para no tocar"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  releases:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BORRAR: ${{ inputs.borrar }}
+      DEFINITIVA: ${{ inputs.definitiva }}
+    steps:
+      - name: Validar etiquetas
+        run: |
+          for tag in "$BORRAR" "$DEFINITIVA"; do
+            if [ -n "$tag" ] && ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Etiqueta no válida: $tag" >&2; exit 1
+            fi
+          done
+          if [ -n "$BORRAR" ] && [ "$BORRAR" = "$DEFINITIVA" ]; then
+            echo "No se puede borrar y marcar como definitiva la misma release" >&2; exit 1
+          fi
+
+      - name: Borrar release
+        if: inputs.borrar != ''
+        run: |
+          gh release view "$BORRAR" --json tagName,isPrerelease
+          gh release delete "$BORRAR" --yes
+          echo "- Release $BORRAR borrada (la etiqueta se conserva)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Marcar como definitiva
+        if: inputs.definitiva != ''
+        run: |
+          gh release edit "$DEFINITIVA" --prerelease=false --latest
+          gh release view "$DEFINITIVA" --json tagName,isPrerelease,isLatest
+          echo "- Release $DEFINITIVA marcada como definitiva (Latest)" >> "$GITHUB_STEP_SUMMARY"
