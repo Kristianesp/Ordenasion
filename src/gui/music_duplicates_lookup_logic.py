@@ -495,7 +495,7 @@ def auto_apply_high_confidence_variant(
     )
     chosen_updates = dict(chosen_candidate.get("suggested_updates") or suggested)
     message = (
-        "🤖 Se ha seleccionado automaticamente: "
+        "🤖 Se ha seleccionado automáticamente: "
         f"{Path(normalized_path).name} -> "
         f"{chosen_updates.get('artist', '-') or '-'} / "
         f"{chosen_updates.get('title', '-') or '-'} / "

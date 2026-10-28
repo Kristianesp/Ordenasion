@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Logica de la pestaña de duplicados musicales."""
+"""Lógica de la pestaña de duplicados musicales."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def show_group_detail(view: Any, current: Any, previous: Any) -> None:
         view.duplicates_table.setRowCount(0)
         view.detail.clear()
         view.best_duplicate_hint.setText(
-            "La mejor copia sugerida se resaltara al analizar duplicados."
+            "La mejor copia sugerida se resaltará al analizar duplicados."
         )
         return
     identity_key = current.data(Qt.ItemDataRole.UserRole)
@@ -128,7 +128,7 @@ def update_duplicate_preview(view: Any) -> None:
         recommendation = "Conservar" if str(path) == best_path else "Revisar/eliminar"
         lines.append(build_duplicate_preview_block(path, metadata, recommendation))
     if len(selected_paths) > 3:
-        lines.append(f"...y {len(selected_paths) - 3} pista(s) mas seleccionadas")
+        lines.append(f"...y {len(selected_paths) - 3} pista(s) más seleccionadas")
     if best_path:
         lines.append(f"\nMejor copia sugerida actual: {Path(best_path).name}")
     view.detail.setPlainText("\n\n".join(lines))

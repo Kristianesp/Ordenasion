@@ -133,7 +133,7 @@ def build_duplicates_tab(view: Any) -> QWidget:
     dup_right.addWidget(view.duplicates_table, 1)
 
     view.best_duplicate_hint = QLabel(
-        "La mejor copia sugerida se resaltara al analizar duplicados."
+        "La mejor copia sugerida se resaltará al analizar duplicados."
     )
     view.best_duplicate_hint.setWordWrap(True)
     dup_right.addWidget(view.best_duplicate_hint)
@@ -165,10 +165,14 @@ def build_metadata_tab(view: Any) -> QWidget:
     view.apply_all_btn = QPushButton("Aplicar lote")
     view.apply_all_btn.clicked.connect(view.apply_batch_metadata)
     meta_top.addWidget(view.apply_all_btn)
+    view.cancel_lookup_btn = QPushButton("Cancelar búsqueda")
+    view.cancel_lookup_btn.setVisible(False)
+    view.cancel_lookup_btn.clicked.connect(view.cancel_lookup)
+    meta_top.addWidget(view.cancel_lookup_btn)
     meta_top.addStretch()
     meta_box_layout.addLayout(meta_top)
     view.missing_count_label = QLabel("Pistas con metadatos incompletos: 0")
-    view.lookup_status_label = QLabel("Busqueda online: sin ejecutar.")
+    view.lookup_status_label = QLabel("Búsqueda online: sin ejecutar.")
     view.lookup_status_label.setWordWrap(True)
     view.lookup_progress = QProgressBar()
     view.lookup_progress.setVisible(False)
@@ -211,7 +215,7 @@ def build_metadata_tab(view: Any) -> QWidget:
     library_top.addWidget(view.library_filter_combo)
     view.library_search_input = QLineEdit()
     view.library_search_input.setPlaceholderText(
-        "Filtrar por archivo, titulo, artista..."
+        "Filtrar por archivo, título, artista..."
     )
     view.library_search_input.textChanged.connect(view._on_library_filter_changed)
     library_top.addWidget(view.library_search_input, 1)
@@ -316,7 +320,7 @@ def build_metadata_tab(view: Any) -> QWidget:
     seek_row.addWidget(view.library_time_label)
     library_detail_layout.addLayout(detail_player_row)
     library_detail_layout.addLayout(seek_row)
-    view.library_player_hint = QLabel("Selecciona una pista para escucharla aqui.")
+    view.library_player_hint = QLabel("Selecciona una pista para escucharla aquí.")
     view.library_player_hint.setWordWrap(True)
     library_detail_layout.addWidget(view.library_player_hint)
     detail_actions_layout = QVBoxLayout()
@@ -382,10 +386,10 @@ def build_metadata_tab(view: Any) -> QWidget:
         "Selecciona manualmente otra portada disponible"
     )
     actions_grid.addWidget(view.library_cover_choice_btn, 1, 0)
-    view.library_diagnostics_btn = QPushButton("Ver diagnostico")
+    view.library_diagnostics_btn = QPushButton("Ver diagnóstico")
     view.library_diagnostics_btn.clicked.connect(view.show_selected_track_diagnostics)
     view.library_diagnostics_btn.setToolTip(
-        "Muestra el diagnostico completo del lookup online"
+        "Muestra el diagnóstico completo del lookup online"
     )
     actions_grid.addWidget(view.library_diagnostics_btn, 1, 1)
     for button in (

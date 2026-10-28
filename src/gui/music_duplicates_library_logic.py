@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Logica de biblioteca musical para la vista de duplicados."""
+"""Lógica de biblioteca musical para la vista de duplicados."""
 
 from __future__ import annotations
 

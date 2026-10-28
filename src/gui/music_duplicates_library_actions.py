@@ -128,7 +128,7 @@ def edit_library_columns(view: Any) -> None:
     checkbox_map: dict[int, QCheckBox] = {}
     for index, label in enumerate(view.LIBRARY_COLUMN_LABELS):
         if index == view.LIBRARY_SELECT_COLUMN:
-            label = "Seleccion"
+            label = "Selección"
         checkbox = QCheckBox(label)
         checkbox.setChecked(not view.library_table.isColumnHidden(index))
         if index in {view.LIBRARY_SELECT_COLUMN, view.LIBRARY_FILE_COLUMN}:

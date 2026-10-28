@@ -17,7 +17,7 @@ def build_lookup_preview_text(
         return (
             f"Seleccionado: {Path(track.get('file_path', '')).name} | "
             f"Local: {track.get('artist') or track.get('album_artist') or '-'} - {track.get('title') or '-'} | "
-            "Sin busqueda online todavia"
+            "Sin búsqueda online todavía"
         )
     suggested = dict(result.get("suggested_updates") or {})
     alternatives = summarize_lookup_candidates(result)
@@ -49,7 +49,7 @@ def build_lookup_preview_text(
 
 def build_lookup_status_text(view: Any, results: list[Dict[str, Any]]) -> str:
     if not results:
-        return "Busqueda online: sin candidatos validos"
+        return "Búsqueda online: sin candidatos válidos"
     first = results[0]
     diagnostics = dict(first.get("diagnostics") or {})
     source = first.get("source", "unknown")
@@ -72,8 +72,8 @@ def build_lookup_status_text(view: Any, results: list[Dict[str, Any]]) -> str:
             f"{source_counts.get('discogs', 0)}"
         )
     return (
-        f"Busqueda online: fuente={source} | fingerprint={fingerprint} | "
-        f"diagnostico={reason} | pistas={len(results)} | candidatos={candidate_count}"
+        f"Búsqueda online: fuente={source} | fingerprint={fingerprint} | "
+        f"diagnóstico={reason} | pistas={len(results)} | candidatos={candidate_count}"
         f"{source_hint}{acoustid_hint}"
     )
 
