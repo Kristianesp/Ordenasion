@@ -338,7 +338,7 @@ class AppConfig:
 
     def get_ignored_paths(self) -> list[str]:
         """Retorna rutas ignoradas."""
-        return list(self.get("analysis.ignored_paths", []))
+        return self._clean_path_list(self.get("analysis.ignored_paths", []))
 
     def set_ignored_paths(self, paths: list[str]) -> bool:
         """Guarda rutas ignoradas."""
@@ -346,7 +346,7 @@ class AppConfig:
 
     def get_protected_paths(self) -> list[str]:
         """Retorna rutas protegidas."""
-        return list(self.get("analysis.protected_paths", []))
+        return self._clean_path_list(self.get("analysis.protected_paths", []))
 
     def set_protected_paths(self, paths: list[str]) -> bool:
         """Guarda rutas protegidas."""
@@ -354,32 +354,35 @@ class AppConfig:
 
     def get_favorite_paths(self) -> list[str]:
         """Retorna rutas favoritas."""
-        return list(self.get("analysis.favorite_paths", []))
+        return self._clean_path_list(self.get("analysis.favorite_paths", []))
+
+    def is_favorite_path(self, path: str) -> bool:
+        """True si ``path`` está en favoritos (mismo criterio que el sistema)."""
+        return any(self.same_path(item, path) for item in self.get_favorite_paths())
 
     def add_favorite_path(self, path: str) -> bool:
         """Añade una ruta a favoritos."""
         favorites = self.get_favorite_paths()
         normalized = self._normalize_path(path)
-        if normalized and normalized not in favorites:
+        if normalized and not self.is_favorite_path(normalized):
             favorites.append(normalized)
         return self.set("analysis.favorite_paths", favorites)
 
     def remove_favorite_path(self, path: str) -> bool:
         """Elimina una ruta de favoritos."""
-        normalized = self._normalize_path(path)
-        favorites = [item for item in self.get_favorite_paths() if item != normalized]
+        favorites = [item for item in self.get_favorite_paths() if not self.same_path(item, path)]
         return self.set("analysis.favorite_paths", favorites)
 
     def get_recent_paths(self) -> list[str]:
         """Retorna rutas recientes."""
-        return list(self.get("analysis.recent_paths", []))
+        return self._clean_path_list(self.get("analysis.recent_paths", []))
 
     def push_recent_path(self, path: str, limit: int = 8) -> bool:
         """Inserta una ruta en el historial reciente."""
         normalized = self._normalize_path(path)
         if not normalized:
             return False
-        recents = [item for item in self.get_recent_paths() if item != normalized]
+        recents = [item for item in self.get_recent_paths() if not self.same_path(item, normalized)]
         recents.insert(0, normalized)
         return self.set("analysis.recent_paths", recents[:limit])
 
@@ -592,15 +595,28 @@ class AppConfig:
         return self.set("audio.library_header_state", str(state or "").strip())
 
     def _clean_path_list(self, paths: list[str]) -> list[str]:
-        """Normaliza una lista de rutas configurables."""
-        return [
-            self._normalize_path(path) for path in paths if self._normalize_path(path)
-        ]
+        """Normaliza una lista de rutas configurables (sin vacías ni repetidas)."""
+        cleaned: list[str] = []
+        for path in paths or []:
+            normalized = self._normalize_path(path)
+            if normalized and not any(self.same_path(item, normalized) for item in cleaned):
+                cleaned.append(normalized)
+        return cleaned
 
-    def _normalize_path(self, path: str) -> str:
-        """Normaliza rutas manteniendo formato portable."""
-        normalized = str(path).strip().replace("\\", "/")
-        return normalized
+    @staticmethod
+    def _normalize_path(path: str) -> str:
+        """Ruta con los separadores del sistema (``C:\\Fotos`` en Windows).
+
+        Las configuraciones anteriores guardaban ``C:/Fotos``; se convierten al leer.
+        """
+        text = str(path or "").strip()
+        return os.path.normpath(text) if text else ""
+
+    @classmethod
+    def same_path(cls, first: str, second: str) -> bool:
+        """Compara rutas como el sistema (sin distinguir mayúsculas en Windows)."""
+        a, b = cls._normalize_path(first), cls._normalize_path(second)
+        return bool(a) and os.path.normcase(a) == os.path.normcase(b)
 
     def reset_to_default(self) -> bool:
         """Restaura la configuración por defecto"""

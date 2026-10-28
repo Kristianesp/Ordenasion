@@ -442,7 +442,7 @@ class OrganizePage(ScrollArea):
 
     def update_favorite_button_state(self) -> None:
         path = self.folder_input.text().strip()
-        is_favorite = bool(path) and path in self.config.get_favorite_paths()
+        is_favorite = bool(path) and self.config.is_favorite_path(path)
         self.add_favorite_btn.setText("Quitar favorito" if is_favorite else "Guardar favorito")
         self.add_favorite_btn.setEnabled(bool(path))
         self.add_favorite_btn.setToolTip(
@@ -480,7 +480,7 @@ class OrganizePage(ScrollArea):
         path = self.folder_input.text().strip()
         if not path:
             return
-        if path in self.config.get_favorite_paths():
+        if self.config.is_favorite_path(path):
             self.config.remove_favorite_path(path)
             self.log_message(f"Ruta eliminada de favoritas: {path}")
         else:

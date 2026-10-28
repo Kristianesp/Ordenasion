@@ -61,13 +61,15 @@ def test_size_on_disk_uses_blocks_and_extension_breakdown(tmp_path):
 
 @pytest.mark.skipif(not hasattr(os, "link"), reason="sin hardlinks")
 def test_hardlinks_counted_once_on_disk(tmp_path):
-    (tmp_path / "grande.bin").write_bytes(b"z" * 8192)
+    # En Windows sólo se buscan hardlinks a partir de 1 MiB (requiere un os.stat extra)
+    size = 2 * 1024 * 1024
+    (tmp_path / "grande.bin").write_bytes(b"z" * size)
     try:
         os.link(tmp_path / "grande.bin", tmp_path / "copia.bin")
     except OSError:
         pytest.skip("el sistema de archivos no admite hardlinks")
     result = engine.scan_space(str(tmp_path))
-    assert result.nodes[0].size == 16384  # lógico: por ruta
+    assert result.nodes[0].size == 2 * size  # lógico: por ruta
     assert result.hardlinks_deduped == 1
     files = [node for node in result.nodes if node.kind == "file"]
     assert sorted(node.disk_size == 0 for node in files) == [False, True]

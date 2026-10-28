@@ -1,3 +1,5 @@
+import os
+
 from src.utils.app_config import AppConfig
 
 
@@ -69,3 +71,24 @@ def test_app_config_does_not_lose_audio_keys_between_instances(tmp_path):
     reloaded = AppConfig(str(tmp_path / "app_config.json"))
     assert reloaded.get_music_library_visible_columns() == [0, 1, 2, 3, 4]
     assert reloaded.get_music_library_column_widths()[:5] == [320, 140, 250, 90, 120]
+
+
+def test_paths_use_windows_semantics_with_old_forward_slash_configs(tmp_path, monkeypatch):
+    """En Windows: separadores nativos, rutas antiguas con '/' y sin distinguir mayúsculas."""
+    import ntpath
+    import types
+    import src.utils.app_config as app_config_module
+
+    windows_os = types.SimpleNamespace(**{name: getattr(os, name) for name in dir(os) if not name.startswith("__")})
+    windows_os.path = ntpath
+    monkeypatch.setattr(app_config_module, "os", windows_os)
+    config = AppConfig(str(tmp_path / "config.json"))
+    config.set("analysis.favorite_paths", ["C:/Users/Ana/Fotos"])  # formato de la 3.5
+    assert config.get_favorite_paths() == ["C:\\Users\\Ana\\Fotos"]
+    assert config.is_favorite_path("c:\\users\\ana\\fotos\\")
+    config.add_favorite_path("C:\\Users\\Ana\\Fotos")
+    assert config.get_favorite_paths() == ["C:\\Users\\Ana\\Fotos"]
+    config.remove_favorite_path("c:/users/ana/FOTOS")
+    assert config.get_favorite_paths() == []
+    config.set_protected_paths(["D:/Datos/Boda", "d:\\datos\\boda"])
+    assert config.get_protected_paths() == ["D:\\Datos\\Boda"]
