@@ -63,9 +63,7 @@ def main():
             with patch("src.core.space_usage.shutil.disk_usage", return_value=SimpleNamespace(total=256 * 1024**3, used=156 * 1024**3, free=100 * 1024**3)):
                 result = scan_space(str(fixture))
             # Rutas de presentación ficticias; no se abre ni escanea esta unidad.
-            for node in result.nodes:
-                relative = Path(node.path).relative_to(fixture)
-                node.path = str(Path("Z:/DEMO TEMPORAL") / relative)
+            # Las rutas de los nodos se reconstruyen desde la raíz del resultado.
             result.root_path = "Z:/DEMO TEMPORAL"
             drive = SimpleNamespace(mountpoint="Z:/ · DEMO", total_size=256 * 1024**3,
                                     used_size=156 * 1024**3, free_size=100 * 1024**3)
