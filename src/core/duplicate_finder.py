@@ -551,6 +551,12 @@ class DuplicateFinder:
             "errors": list(self.errors),
             "partial_groups": sum(1 for m in self.group_meta.values() if m.partial),
             "group_meta": {k: m.to_dict() for k, m in self.group_meta.items()},
+            "file_info": {
+                str(path): {"size": self.file_info.get(path, {}).get("size", 0),
+                            "date": self.file_info.get(path, {}).get("date", 0),
+                            "hash": self.file_info.get(path, {}).get("hash", "")}
+                for paths in self.duplicates_db.values() for path in paths
+            },
         }
 
     def get_statistics_fast(self) -> Dict:
