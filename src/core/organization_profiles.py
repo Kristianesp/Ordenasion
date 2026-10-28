@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
+from src.utils.logger import warn
+
 
 class OrganizationProfile:
     """Perfil de organizacion con configuracion personalizada"""
@@ -166,7 +168,8 @@ class ProfileManager:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(profile.to_dict(), f, indent=2, ensure_ascii=False)
             return True
-        except Exception:
+        except (OSError, TypeError, ValueError) as exc:
+            warn(f"No se pudo exportar el perfil {name}: {exc}")
             return False
     
     def import_profile(self, filepath: str) -> Optional[OrganizationProfile]:
@@ -184,7 +187,8 @@ class ProfileManager:
             self.profiles.append(profile)
             self.save_profiles()
             return profile
-        except Exception:
+        except (OSError, ValueError, AttributeError, TypeError) as exc:
+            warn(f"No se pudo importar el perfil {filepath}: {exc}")
             return None
     
     def load_profiles(self) -> bool:
@@ -199,8 +203,8 @@ class ProfileManager:
                 self.profiles = [OrganizationProfile.from_dict(p) for p in profiles_data]
                 self.active_profile = data.get('active_profile', None)
                 return True
-        except Exception:
-            pass
+        except (OSError, ValueError, AttributeError, TypeError) as exc:
+            warn(f"No se pudieron cargar los perfiles: {exc}")
         
         # Si no se puede cargar, crear perfiles por defecto
         self._create_default_profiles()
@@ -216,7 +220,8 @@ class ProfileManager:
             with open(self.profiles_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             return True
-        except Exception:
+        except (OSError, TypeError, ValueError) as exc:
+            warn(f"No se pudieron guardar los perfiles: {exc}")
             return False
     
     def _create_default_profiles(self):

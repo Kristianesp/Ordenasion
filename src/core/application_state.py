@@ -10,6 +10,8 @@ from enum import Enum
 from dataclasses import dataclass
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from src.utils.logger import debug, error as log_error, warn as log_warn
+
 # Importaciones lazy para evitar problemas en PyInstaller
 if TYPE_CHECKING:
     from .category_manager import CategoryManager
@@ -48,18 +50,18 @@ class _SignalEmitter(QObject):
     
     def __init__(self, parent=None):
         # Inicializar QObject de forma diferida y segura
-        print("[SignalEmitter] Creando QObject para señales...")
+        debug("[SignalEmitter] Creando QObject para señales...")
         try:
             super().__init__(parent)
-            print("[SignalEmitter] QObject inicializado correctamente")
+            debug("[SignalEmitter] QObject inicializado correctamente")
         except Exception as e:
-            print(f"[SignalEmitter] ERROR: {e}")
+            log_error(f"[SignalEmitter] ERROR: {e}")
             # Intentar sin parent
             try:
                 super().__init__(None)
-                print("[SignalEmitter] QObject inicializado sin parent")
+                debug("[SignalEmitter] QObject inicializado sin parent")
             except Exception as e2:
-                print(f"[SignalEmitter] ERROR CRÍTICO: {e2}")
+                log_error(f"[SignalEmitter] ERROR CRÍTICO: {e2}")
                 raise
 
 
@@ -80,7 +82,7 @@ class ApplicationState:
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    print("[AppState] Creando nueva instancia en __new__...")
+                    debug("[AppState] Creando nueva instancia en __new__...")
                     cls._instance = super().__new__(cls)
                     cls._instance._initialized = False
                     cls._instance._signal_emitter = None
@@ -90,13 +92,13 @@ class ApplicationState:
         if self._initialized:
             return
         
-        print("[AppState] Iniciando __init__ de ApplicationState...")
+        debug("[AppState] Iniciando __init__ de ApplicationState...")
         
         # ⚠️ CRÍTICO: NO heredar de QObject - usar uno interno
         # Esto evita el bloqueo en PyInstaller
-        print("[AppState] QObject interno se creará bajo demanda cuando se necesite...")
+        debug("[AppState] QObject interno se creará bajo demanda cuando se necesite...")
         
-        print("[AppState] Configurando atributos iniciales...")
+        debug("[AppState] Configurando atributos iniciales...")
         
         # === COMPONENTES PRINCIPALES ===
         self.category_manager: Optional['CategoryManager'] = None
@@ -122,42 +124,42 @@ class ApplicationState:
         self._observers: List[Callable[[ApplicationEvent], None]] = []
         self._observer_lock = threading.Lock()
         
-        print("[AppState] Atributos y locks inicializados")
+        debug("[AppState] Atributos y locks inicializados")
         
         # === INICIALIZACIÓN ===
-        print("[AppState] Llamando _initialize_components()...")
+        debug("[AppState] Llamando _initialize_components()...")
         self._initialize_components()
-        print("[AppState] _initialize_components() completado")
+        debug("[AppState] _initialize_components() completado")
         
         self._initialized = True
-        print("[AppState] Flag _initialized = True")
+        debug("[AppState] Flag _initialized = True")
         
         # Emitir evento de inicialización (diferido - después de que UI esté lista)
-        print("[AppState] Evento de inicialización se emitirá cuando UI esté lista")
+        debug("[AppState] Evento de inicialización se emitirá cuando UI esté lista")
     
     def _get_signal_emitter(self) -> Optional[_SignalEmitter]:
         """Obtiene o crea el QObject interno para señales (lazy initialization)"""
         if self._signal_emitter is None:
-            print("[AppState] Creando QObject interno para señales (primera vez)...")
+            debug("[AppState] Creando QObject interno para señales (primera vez)...")
             try:
                 # Intentar obtener QApplication como parent
                 from PyQt6.QtWidgets import QApplication
                 app = QApplication.instance()
                 parent = app if app else None
-                print(f"[AppState] QApplication parent: {parent is not None}")
+                debug(f"[AppState] QApplication parent: {parent is not None}")
                 
                 self._signal_emitter = _SignalEmitter(parent)
-                print("[AppState] QObject interno creado exitosamente")
+                debug("[AppState] QObject interno creado exitosamente")
             except Exception as e:
-                print(f"[AppState] ERROR creando QObject interno: {e}")
+                log_error(f"[AppState] ERROR creando QObject interno: {e}")
                 import traceback
-                print(f"[AppState] Traceback: {traceback.format_exc()}")
+                debug(f"[AppState] Traceback: {traceback.format_exc()}")
                 # Crear sin parent como último recurso
                 try:
                     self._signal_emitter = _SignalEmitter(None)
-                    print("[AppState] QObject interno creado sin parent")
+                    debug("[AppState] QObject interno creado sin parent")
                 except Exception as e2:
-                    print(f"[AppState] ERROR CRÍTICO: No se pudo crear QObject interno: {e2}")
+                    log_error(f"[AppState] ERROR CRÍTICO: No se pudo crear QObject interno: {e2}")
                     # Continuar sin señales Qt - la app funcionará sin ellas
                     self._signal_emitter = None
         return self._signal_emitter
@@ -195,7 +197,7 @@ class ApplicationState:
         los componentes se crean bajo demanda
         """
         try:
-            print("[AppState] Inicializando componentes (modo super lazy)...")
+            debug("[AppState] Inicializando componentes (modo super lazy)...")
             
             # === PASO 1: Solo establecer None - NO crear nada todavía ===
             self.app_config = None
@@ -207,15 +209,15 @@ class ApplicationState:
             self.current_theme = "Claro Elegante"
             self.current_font_size = 12
             
-            print(f"[AppState] Valores por defecto: {self.current_theme}, {self.current_font_size}px")
-            print("[AppState] Componentes en modo lazy (se crearán bajo demanda)")
+            debug(f"[AppState] Valores por defecto: {self.current_theme}, {self.current_font_size}px")
+            debug("[AppState] Componentes en modo lazy (se crearán bajo demanda)")
             
         except Exception as e:
             # ⚠️ ÚLTIMO RECURSO: Capturar TODO para evitar que el módulo falle
             import traceback
-            print(f"[AppState] ❌ ERROR CRÍTICO en _initialize_components: {e}")
-            print(f"[AppState] Traceback completo:")
-            traceback.print_exc()
+            log_error(f"[AppState] ❌ ERROR CRÍTICO en _initialize_components: {e}")
+            debug(f"[AppState] Traceback completo:")
+            log_error(traceback.format_exc())
             
             # Asegurar que al menos tenemos valores por defecto
             if not hasattr(self, 'app_config'):
@@ -237,7 +239,7 @@ class ApplicationState:
             with self._lock:
                 if self.app_config is None:
                     try:
-                        print("[AppState] Inicializando AppConfig de forma lazy...")
+                        debug("[AppState] Inicializando AppConfig de forma lazy...")
                         from src.utils.app_config import AppConfig
                         self.app_config = AppConfig()
                         
@@ -245,18 +247,18 @@ class ApplicationState:
                         try:
                             self.current_theme = self.app_config.get_theme()
                             self.current_font_size = self.app_config.get_font_size()
-                        except:
-                            pass
+                        except Exception as e:
+                            log_warn(f"[AppState] No se pudo leer el tema guardado: {e}")
                         
-                        print("[AppState] ✅ AppConfig inicializado")
+                        debug("[AppState] ✅ AppConfig inicializado")
                         self._emit_event(EventType.STATE_CHANGED, {
                             "component": "app_config",
                             "action": "initialized"
                         }, "ApplicationState")
                     except Exception as e:
-                        print(f"[AppState] ⚠️ ERROR creando AppConfig: {e}")
+                        log_error(f"[AppState] ⚠️ ERROR creando AppConfig: {e}")
                         import traceback
-                        traceback.print_exc()
+                        log_error(traceback.format_exc())
                         self.app_config = None
         return self.app_config
     
@@ -266,18 +268,18 @@ class ApplicationState:
             with self._lock:
                 if self.category_manager is None:
                     try:
-                        print("[AppState] Inicializando CategoryManager de forma lazy...")
+                        debug("[AppState] Inicializando CategoryManager de forma lazy...")
                         from .category_manager import CategoryManager
                         self.category_manager = CategoryManager()
-                        print("[AppState] ✅ CategoryManager inicializado")
+                        debug("[AppState] ✅ CategoryManager inicializado")
                         self._emit_event(EventType.STATE_CHANGED, {
                             "component": "category_manager",
                             "action": "initialized"
                         }, "ApplicationState")
                     except Exception as e:
-                        print(f"[AppState] ⚠️ ERROR creando CategoryManager: {e}")
+                        log_error(f"[AppState] ⚠️ ERROR creando CategoryManager: {e}")
                         import traceback
-                        traceback.print_exc()
+                        log_error(traceback.format_exc())
                         self.category_manager = None
         return self.category_manager
     
@@ -317,7 +319,7 @@ class ApplicationState:
                 try:
                     app_config.set_theme(theme)
                 except Exception as e:
-                    print(f"[AppState] ⚠️ Error guardando tema: {e}")
+                    log_error(f"[AppState] ⚠️ Error guardando tema: {e}")
                 
             # Emitir eventos
             self._emit_event(EventType.THEME_CHANGED, {
@@ -346,7 +348,7 @@ class ApplicationState:
                 try:
                     app_config.set_font_size(font_size)
                 except Exception as e:
-                    print(f"[AppState] ⚠️ Error guardando font_size: {e}")
+                    log_error(f"[AppState] ⚠️ Error guardando font_size: {e}")
                 
             self._emit_event(EventType.STATE_CHANGED, {
                 "component": "font_size",
@@ -467,7 +469,7 @@ class ApplicationState:
             try:
                 emitter.state_changed.emit(event)
             except Exception as e:
-                print(f"[AppState] Error emitiendo señal: {e}")
+                log_error(f"[AppState] Error emitiendo señal: {e}")
         
         # Notificar observadores Python
         with self._observer_lock:
@@ -476,11 +478,7 @@ class ApplicationState:
                     observer(event)
                 except Exception as e:
                     # Log error pero no interrumpir otros observadores
-                    try:
-                        from src.utils.logger import error
-                        error(f"Error en observador: {e}")
-                    except:
-                        print(f"❌ Error en observador: {e}")
+                    log_error(f"Error en observador: {e}")
     
     def get_state_summary(self) -> Dict[str, Any]:
         """Obtiene un resumen del estado actual"""
@@ -530,14 +528,14 @@ def get_app_state() -> ApplicationState:
     if _app_state_instance is None:
         with _app_state_lock:
             if _app_state_instance is None:
-                print("[AppState] Creando instancia global de ApplicationState...")
+                debug("[AppState] Creando instancia global de ApplicationState...")
                 try:
                     _app_state_instance = ApplicationState()
-                    print("[AppState] Instancia global creada OK")
+                    debug("[AppState] Instancia global creada OK")
                 except Exception as e:
-                    print(f"[AppState] ERROR CRÍTICO al crear instancia global: {e}")
+                    log_error(f"[AppState] ERROR CRÍTICO al crear instancia global: {e}")
                     import traceback
-                    traceback.print_exc()
+                    log_error(traceback.format_exc())
                     raise
     
     return _app_state_instance
@@ -568,9 +566,9 @@ class _AppStateProxy:
                     cache = get_app_state()
                     object.__setattr__(self, '_instance_cache', cache)
                 except Exception as e:
-                    print(f"[AppStateProxy] ERROR CRÍTICO creando ApplicationState: {e}")
+                    log_error(f"[AppStateProxy] ERROR CRÍTICO creando ApplicationState: {e}")
                     import traceback
-                    traceback.print_exc()
+                    log_error(traceback.format_exc())
                     # No re-intentar en el futuro
                     cache = None
             else:
@@ -583,7 +581,7 @@ class _AppStateProxy:
         try:
             instance = self._get_instance()
             if instance is None:
-                print(f"[AppStateProxy] ⚠️ ApplicationState no disponible, '{name}' = None")
+                log_warn(f"[AppStateProxy] ⚠️ ApplicationState no disponible, '{name}' = None")
                 return None
             
             # ⚠️ CRÍTICO: Usar getters lazy para componentes pesados
@@ -598,9 +596,9 @@ class _AppStateProxy:
                 # Para otros atributos, acceso directo
                 return getattr(instance, name)
         except Exception as e:
-            print(f"[AppStateProxy] ERROR accediendo a '{name}': {e}")
+            log_error(f"[AppStateProxy] ERROR accediendo a '{name}': {e}")
             import traceback
-            traceback.print_exc()
+            log_error(traceback.format_exc())
             # Devolver None en lugar de fallar
             return None
     
@@ -615,18 +613,18 @@ class _AppStateProxy:
                 if instance is not None:
                     setattr(instance, name, value)
                 else:
-                    print(f"[AppStateProxy] ⚠️ No se puede establecer '{name}': ApplicationState no disponible")
+                    log_warn(f"[AppStateProxy] ⚠️ No se puede establecer '{name}': ApplicationState no disponible")
             except Exception as e:
-                print(f"[AppStateProxy] ERROR estableciendo '{name}': {e}")
+                log_error(f"[AppStateProxy] ERROR estableciendo '{name}': {e}")
                 import traceback
-                traceback.print_exc()
+                log_error(traceback.format_exc())
     
     def __bool__(self):
         """Permite usar el proxy en condiciones booleanas"""
         try:
             instance = self._get_instance()
             return instance is not None
-        except:
+        except Exception:
             return False
     
     def __repr__(self):
@@ -640,7 +638,7 @@ class _AppStateProxy:
                 return "<AppStateProxy: initialization failed>"
             else:
                 return "<AppStateProxy: not initialized>"
-        except:
+        except AttributeError:
             return "<AppStateProxy: unknown state>"
 
 # ⚠️ CRÍTICO: Crear el proxy pero NO la instancia

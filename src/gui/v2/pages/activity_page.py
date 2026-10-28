@@ -6,6 +6,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
+    CaptionLabel,
     FluentIcon,
     ListWidget,
     PushButton,
@@ -14,6 +15,7 @@ from qfluentwidgets import (
 )
 
 from src.gui.task_center import task_registry
+from src.utils.logger import warn
 from src.gui.v2.components import GlassCard, PageHeader
 
 
@@ -28,8 +30,9 @@ class ActivityPage(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._build_ui()
         task_registry.tasks_updated.connect(self.refresh)
-        controller.operation_state_changed.connect(self.refresh)
+        controller.operation_state_changed.connect(self._on_operation_state_changed)
         self.refresh()
+        self._refresh_history()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -79,6 +82,24 @@ class ActivityPage(QWidget):
         tasks_layout.addWidget(self.undo_button)
         body.addWidget(tasks_card, 1)
 
+        history_card = GlassCard()
+        self.history_card = history_card
+        history_layout = QVBoxLayout(history_card)
+        history_layout.setContentsMargins(16, 16, 16, 16)
+        history_layout.setSpacing(8)
+        history_layout.addWidget(SubtitleLabel("Historial de organizaciones"))
+        history_layout.addWidget(
+            BodyLabel("Se conserva entre sesiones. Puedes deshacer cualquier organización que no se haya revertido.")
+        )
+        self.history_empty_label = BodyLabel("Todavía no hay organizaciones registradas.")
+        self.history_empty_label.setWordWrap(True)
+        history_layout.addWidget(self.history_empty_label)
+        self.history_rows = QVBoxLayout()
+        self.history_rows.setSpacing(6)
+        history_layout.addLayout(self.history_rows)
+        self.history_entries = []
+        body.addWidget(history_card)
+
         log_card = GlassCard()
         self.log_card = log_card
         log_layout = QVBoxLayout(log_card)
@@ -114,7 +135,8 @@ class ActivityPage(QWidget):
     def refresh(self) -> None:
         self.result_button.setEnabled(bool(self.controller.last_operation_summary))
         self.undo_button.setEnabled(bool(self.controller.last_transaction_id)
-                                    and not self.controller.current_organize_task_id)
+                                    and not self.controller.current_organize_task_id
+                                    and not getattr(self.controller, "current_rollback_task_id", None))
         current_id = None
         if self.task_list.currentItem():
             current_id = self.task_list.currentItem().data(Qt.ItemDataRole.UserRole)
@@ -142,6 +164,79 @@ class ActivityPage(QWidget):
         elif not self.task_list.count():
             self.task_detail.setPlainText("No hay tareas registradas.")
             self.cancel_button.setEnabled(False)
+
+    def _on_operation_state_changed(self) -> None:
+        self.refresh()
+        self._refresh_history()
+
+    HISTORY_LIMIT = 15
+    _STATUS_LABELS = {
+        "completado": "Completada",
+        "completado con errores": "Con errores",
+        "cancelado": "Cancelada",
+        "error": "Error",
+        "interrumpido": "Interrumpida",
+        "en curso": "En curso",
+    }
+
+    def _history_entries(self) -> list:
+        getter = getattr(self.controller, "get_transaction_history", None)
+        if not callable(getter):
+            return []
+        try:
+            return list(getter(self.HISTORY_LIMIT))
+        except Exception as exc:
+            warn(f"No se pudo leer el historial de organizaciones: {exc}")
+            return []
+
+    @classmethod
+    def describe_transaction(cls, entry: dict) -> str:
+        """Texto de una fila del historial."""
+        try:
+            moment = datetime.fromisoformat(entry.get("timestamp", ""))
+            when = f"{moment:%Y-%m-%d %H:%M}"
+        except (TypeError, ValueError):
+            when = "Fecha desconocida"
+        status = cls._STATUS_LABELS.get(entry.get("status"), entry.get("status") or "—")
+        undo_state = entry.get("undo_state")
+        if undo_state == "deshecha":
+            status += " · deshecha"
+        elif undo_state == "parcial":
+            status += " · deshecha en parte"
+        moves = entry.get("moves", 0)
+        folder = entry.get("source_folder") or entry.get("description", "")
+        return f"{when} · {status} · {moves} elementos movidos · {folder}"
+
+    def _refresh_history(self) -> None:
+        entries = self._history_entries()
+        while self.history_rows.count():
+            item = self.history_rows.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.history_entries = []
+        self.history_empty_label.setVisible(not entries)
+        busy = bool(getattr(self.controller, "current_organize_task_id", None)
+                    or getattr(self.controller, "current_rollback_task_id", None))
+        can_rollback = callable(getattr(self.controller, "rollback_transaction", None))
+        for entry in entries:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            label = CaptionLabel(self.describe_transaction(entry))
+            label.setWordWrap(True)
+            label.setToolTip(entry.get("description", ""))
+            row_layout.addWidget(label, 1)
+            undo = PushButton(FluentIcon.RETURN, "Deshacer")
+            undo.setAccessibleName(f"Deshacer organización del {entry.get('timestamp', '')}")
+            undo.setEnabled(bool(entry.get("can_undo")) and not busy and can_rollback)
+            transaction_id = entry.get("id")
+            undo.clicked.connect(
+                lambda _checked=False, txn=transaction_id: self.controller.rollback_transaction(txn)
+            )
+            row_layout.addWidget(undo)
+            self.history_rows.addWidget(row)
+            self.history_entries.append((transaction_id, undo, label))
 
     def _render_task(self, current, _previous) -> None:
         if current is None:

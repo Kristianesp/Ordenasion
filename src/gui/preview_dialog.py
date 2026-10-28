@@ -2,31 +2,89 @@
 """
 Dialogo de Preview para el Organizador de Archivos
 Muestra una vista previa de los cambios antes de organizar
+
+La vista previa calcula el ``OrganizationPlan`` que después ejecuta el
+worker tal cual (``get_plan()``), de modo que ambos no pueden divergir.
 """
 
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QHeaderView,
     QGroupBox,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PyQt6.QtGui import QColor
 from qfluentwidgets import CheckBox, ComboBox, PrimaryPushButton, PushButton
 
-from src.utils.app_config import AppConfig
 from src.gui.v2.theme import apply_dialog_surface, current_tokens
 from src.core.organization_conflicts import (
     CONFLICT_POLICY_OVERWRITE,
     CONFLICT_POLICY_RENAME,
     CONFLICT_POLICY_SKIP,
-    build_base_destination,
-    resolve_destination,
 )
+from src.core.organization_plan import (
+    ACTION_OVERWRITE,
+    ACTION_RENAME,
+    ACTION_SKIP,
+    STATUS_NO_CONFLICT,
+    build_organization_plan,
+)
+
+PREVIEW_HEADERS = ["Tipo", "Nombre", "Destino", "Ruta final", "Estado"]
+_ROW_KEYS = ("type", "name", "destination_label", "destination_path", "status")
+
+
+class PreviewTableModel(QAbstractTableModel):
+    """Modelo ligero: las filas se cargan de golpe (sin insertRow por fila)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows = []
+        self._warning_color = QColor(current_tokens().warning)
+
+    def set_rows(self, rows):
+        self.beginResetModel()
+        self._rows = rows
+        self.endResetModel()
+
+    def set_warning_color(self, color):
+        self._warning_color = QColor(color)
+        if self._rows:
+            self.dataChanged.emit(
+                self.index(0, 4),
+                self.index(len(self._rows) - 1, 4),
+                [Qt.ItemDataRole.ForegroundRole],
+            )
+
+    def warning_color(self) -> QColor:
+        return QColor(self._warning_color)
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(PREVIEW_HEADERS)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._rows[index.row()]
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
+            return row[_ROW_KEYS[index.column()]]
+        if role == Qt.ItemDataRole.ForegroundRole and index.column() == 4:
+            if row["status"] != STATUS_NO_CONFLICT:
+                return self._warning_color
+        return None
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+            return PREVIEW_HEADERS[section]
+        return None
 
 
 class PreviewDialog(QDialog):
@@ -41,6 +99,8 @@ class PreviewDialog(QDialog):
         organize_by_date=False,
         check_duplicates=False,
         conflict_policy=CONFLICT_POLICY_RENAME,
+        category_folder=None,
+        category_folder_names=None,
     ):
         super().__init__(parent)
         self.folder_movements = folder_movements
@@ -49,41 +109,30 @@ class PreviewDialog(QDialog):
         self.organize_by_date = organize_by_date
         self.check_duplicates = check_duplicates
         self.conflict_policy = conflict_policy
+        self.category_folder = category_folder
+        self.category_folder_names = category_folder_names
+        self.plan = None
         self._setup_ui()
-    
+
     def _setup_ui(self):
         self.setWindowTitle("Revisar y organizar")
         self.resize(900, 600)
         self.setMinimumSize(640, 440)
         self.setModal(True)
-        
+
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.setContentsMargins(15, 15, 15, 15)
-        
+
         # Header informativo
         header = QLabel("Vista Previa de Cambios")
         header.setObjectName("preview_header")
         layout.addWidget(header)
-        
-        # Resumen
-        total_folders = len(self.folder_movements)
-        total_files = len(self.file_movements)
-        total_items = total_folders + total_files
 
+        # Resumen
         self.preview_rows = []
         self.conflict_count = 0
-        categories = {}
-        for mov in self.folder_movements:
-            categories[mov["category"]] = categories.get(mov["category"], 0) + 1
-        for mov in self.file_movements:
-            categories[mov["category"]] = categories.get(mov["category"], 0) + 1
-
-        summary = QLabel(
-            f"Se organizarán {total_items} elementos · {total_folders} carpetas · {total_files} archivos\n"
-            f"Destino(s): {len(categories)} · Conflictos detectados: 0\n"
-            f"Carpeta origen: {self.folder_path or 'No especificada'}"
-        )
+        summary = QLabel("")
         self.summary_label = summary
         summary.setObjectName("preview_summary")
         summary.setWordWrap(True)
@@ -112,88 +161,101 @@ class PreviewDialog(QDialog):
         )
         conflict_layout.addWidget(self.conflict_policy_combo, 1)
         layout.addWidget(self.conflict_box)
-        
-        # Tabla de preview
-        self.preview_table = QTableWidget()
-        self.preview_table.setColumnCount(5)
-        self.preview_table.setHorizontalHeaderLabels(["Tipo", "Nombre", "Destino", "Ruta final", "Estado"])
-        self.preview_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.preview_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.preview_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.preview_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.preview_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+
+        # Tabla de preview (modelo: se rellena de una vez)
+        self.preview_model = PreviewTableModel(self)
+        self.preview_table = QTableView()
+        self.preview_table.setModel(self.preview_model)
+        self.preview_table.verticalHeader().setVisible(False)
+        header_view = self.preview_table.horizontalHeader()
+        header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header_view.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        self.preview_table.setColumnWidth(1, 240)
+        self.preview_table.setColumnWidth(4, 220)
         self.preview_table.setAlternatingRowColors(True)
-        self.preview_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.preview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        
+        self.preview_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.preview_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
         # Llenar tabla
         self._refresh_preview()
         layout.addWidget(self.preview_table)
-        
+
         # Checkbox de confirmacion
         self.confirm_checkbox = CheckBox(
             "Confirmo que quiero proceder con la organizacion"
         )
         layout.addWidget(self.confirm_checkbox)
-        
+
         # Botones
         btn_layout = QHBoxLayout()
-        
+
         self.cancel_btn = PushButton("Cancelar")
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.cancel_btn)
-        
+
         btn_layout.addStretch()
-        
+
         self.confirm_btn = PrimaryPushButton("Confirmar y organizar")
         self.confirm_btn.setEnabled(False)
         self.confirm_btn.clicked.connect(self.accept)
         btn_layout.addWidget(self.confirm_btn)
-        
+
         layout.addLayout(btn_layout)
-        
+
         # Conectar checkbox
         self.confirm_checkbox.stateChanged.connect(self._on_confirm_changed)
         self._apply_theme()
 
     def get_conflict_policy(self):
         return self.conflict_policy_combo.currentData()
-    
+
+    def get_plan(self):
+        """Plan confirmado: el worker lo ejecuta tal cual."""
+        return self.plan
+
     def _populate_preview(self):
-        """Llena la tabla con la vista previa"""
-        self.preview_table.setRowCount(0)
-        for row_index, row_data in enumerate(self.preview_rows):
-            self.preview_table.insertRow(row_index)
-            self.preview_table.setItem(row_index, 0, QTableWidgetItem(row_data["type"]))
-            self.preview_table.setItem(row_index, 1, QTableWidgetItem(row_data["name"]))
-            self.preview_table.setItem(row_index, 2, QTableWidgetItem(row_data["destination_label"]))
-            self.preview_table.setItem(row_index, 3, QTableWidgetItem(row_data["destination_path"]))
-            status_item = QTableWidgetItem(row_data["status"])
-            if row_data["status"] != "Sin conflicto":
-                status_item.setForeground(QColor(current_tokens().warning))
-            self.preview_table.setItem(row_index, 4, status_item)
+        """Llena la tabla con la vista previa (un único reset del modelo)"""
+        self.preview_model.set_rows(self.preview_rows)
 
     def _refresh_summary(self):
         total_items = len(self.folder_movements) + len(self.file_movements)
-        conflict_count = sum(1 for row in self.preview_rows if row["status"] != "Sin conflicto")
-        skipped = sum(row["status"] == "Se omitirá por conflicto" for row in self.preview_rows)
-        self.summary_label.setText(
-            f"Selección: {total_items} elementos · {len(self.folder_movements)} carpetas · {len(self.file_movements)} archivos\n"
-            f"Previstos para mover: {total_items - skipped} · Omitidos por conflicto: {skipped}\n"
-            f"Destino(s): {len({row['destination_label'] for row in self.preview_rows})} · Conflictos detectados: {conflict_count}\n"
-            f"Carpeta origen: {self.folder_path or 'No especificada'}\n"
-            + ("Se comprobarán duplicados durante la operación y se omitirán las copias detectadas."
-               if self.check_duplicates else "La detección de duplicados está desactivada.")
+        self.conflict_count = sum(
+            1 for row in self.preview_rows if row["status"] != STATUS_NO_CONFLICT
         )
+        skipped = sum(row["status"] == "Se omitirá por conflicto" for row in self.preview_rows)
+        invalid = self.plan.invalid_count if self.plan else 0
+        lines = [
+            f"Selección: {total_items} elementos · {len(self.folder_movements)} carpetas · {len(self.file_movements)} archivos",
+            f"Previstos para mover: {total_items - skipped - invalid} · Omitidos por conflicto: {skipped}",
+        ]
+        if invalid:
+            lines.append(
+                f"No se moverán {invalid} elementos: carpetas de categoría, destinos dentro "
+                "del propio elemento o elementos que ya no existen"
+            )
+        lines += [
+            f"Destino(s): {len({row['destination_label'] for row in self.preview_rows})} · Conflictos detectados: {self.conflict_count}",
+            f"Carpeta origen: {self.folder_path or 'No especificada'}",
+            "Se comprobarán duplicados durante la operación y se omitirán las copias detectadas."
+            if self.check_duplicates
+            else "La detección de duplicados está desactivada.",
+        ]
+        self.summary_label.setText("\n".join(lines))
 
     def _refresh_preview(self, *_args):
         self.conflict_policy = self.get_conflict_policy()
         self.preview_rows = self._build_preview_rows()
-        has_conflicts = any(row["status"] != "Sin conflicto" for row in self.preview_rows)
+        has_conflicts = any(
+            item.action in (ACTION_RENAME, ACTION_OVERWRITE, ACTION_SKIP)
+            for item in self.plan.items
+        )
         self.conflict_box.setVisible(has_conflicts)
         self._populate_preview()
         self._refresh_summary()
-    
+
     def _format_size(self, size_bytes):
         if size_bytes == 0:
             return "0 B"
@@ -203,66 +265,38 @@ class PreviewDialog(QDialog):
             size_bytes /= 1024.0
             i += 1
         return f"{size_bytes:.1f} {size_names[i]}"
-    
+
     def _on_confirm_changed(self, state):
         self.confirm_btn.setEnabled(int(state) == int(Qt.CheckState.Checked.value))
 
     def _build_preview_rows(self):
-        rows = []
-        reserved = set()
-        for mov in self.folder_movements:
-            base_destination = build_base_destination(
-                self.folder_path,
-                mov["category"],
-                mov["folder"].name,
-                organize_by_date=False,
-            )
-            resolved = resolve_destination(
-                base_destination,
-                conflict_policy=self.conflict_policy,
-                is_folder=True,
-                reserved=reserved,
-            )
-            reserved.add(resolved.destination)
-            rows.append(
-                {
-                    "type": "Carpeta",
-                    "name": f"{mov['folder'].name} ({self._format_size(mov.get('size', 0))})",
-                    "destination_label": mov["category"],
-                    "destination_path": str(resolved.destination),
-                    "status": resolved.status,
-                }
-            )
-        for mov in self.file_movements:
-            base_destination = build_base_destination(
-                self.folder_path,
-                mov["category"],
-                mov["file"].name,
-                organize_by_date=self.organize_by_date,
-                modified_at=mov["file"].stat().st_mtime,
-            )
-            resolved = resolve_destination(
-                base_destination,
-                conflict_policy=self.conflict_policy,
-                is_folder=False,
-                reserved=reserved,
-            )
-            if resolved.action != "skip":
-                reserved.add(resolved.destination)
-            rows.append(
-                {
-                    "type": "Archivo",
-                    "name": f"{mov['file'].name} ({self._format_size(mov.get('size', 0))})",
-                    "destination_label": mov["category"],
-                    "destination_path": str(resolved.destination),
-                    "status": resolved.status,
-                }
-            )
-        return rows
+        """Calcula el plan (una vez por política) y lo convierte en filas.
+
+        El plan lee cada carpeta de destino una sola vez y tolera archivos que
+        desaparecen (se marcan como omitidos en lugar de romper el diálogo).
+        """
+        self.plan = build_organization_plan(
+            self.folder_path,
+            self.folder_movements,
+            self.file_movements,
+            conflict_policy=self.conflict_policy,
+            organize_by_date=self.organize_by_date,
+            check_duplicates=self.check_duplicates,
+            category_folder=self.category_folder,
+            category_folder_names=self.category_folder_names,
+        )
+        return [
+            {
+                "type": "Carpeta" if item.is_folder else "Archivo",
+                "name": f"{item.source.name} ({self._format_size(item.size)})",
+                "destination_label": item.category,
+                "destination_path": str(item.destination),
+                "status": item.status,
+            }
+            for item in self.plan.items
+        ]
 
     def _apply_theme(self):
         self.setObjectName("fluentPreviewDialog")
         tokens = apply_dialog_surface(self)
-        for row, data in enumerate(self.preview_rows):
-            if data["status"] != "Sin conflicto":
-                self.preview_table.item(row, 4).setForeground(QColor(tokens.warning))
+        self.preview_model.set_warning_color(tokens.warning)
