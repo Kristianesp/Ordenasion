@@ -229,8 +229,11 @@ def test_library_side_controls_use_accessible_layout(monkeypatch):
     assert view.library_clear_cache_btn.text() == "Limpiar cache"
     assert view.library_cover_choice_btn.text() == "Elegir portada"
     assert view.library_diagnostics_btn.text() == "Ver diagnostico"
-    assert view.library_refresh_cache_btn.minimumHeight() >= 34
-    assert view.library_cover_choice_btn.minimumHeight() >= 34
+    from src.gui.v2.theme import typography_scale
+    from src.utils.app_config import AppConfig
+    expected = typography_scale(AppConfig()).control_height
+    assert view.library_refresh_cache_btn.minimumHeight() == expected
+    assert view.library_cover_choice_btn.minimumHeight() == expected
 
     view.deleteLater()
     app.processEvents()

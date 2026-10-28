@@ -1,111 +1,69 @@
-# Guía para Crear Releases, Tags y Ejecutables (.exe)
+# Compilación y release de Ordenasion 3.5.0
 
-Este documento describe el flujo recomendado para:
-- Compilar el ejecutable (.exe)
-- Etiquetar versiones (tags)
-- Crear releases en GitHub
-- Adjuntar archivos ejecutables para todas las futuras versiones
+## 1. Entorno y paquete
 
----
+Usa Python 3.12 x64 y el venv del proyecto. Instala las dependencias de aplicación
+más las herramientas de build, separadas de las de runtime:
 
-## 1. COMPILAR EL EJECUTABLE (.EXE)
-
-### Checklist Precompilación
-- [ ] Usa SIEMPRE el archivo `OrganizadorAlpha_OPTIMIZED.spec`
-- [ ] Asegúrate que `main_optimized.py` es el punto de entrada
-- [ ] Elimina emojis de prints/logs críticos
-- [ ] Verifica que `ApplicationState` NO hereda de QObject directamente
-
-### Limpia Compilaciones Previas
 ```powershell
-Remove-Item -Path "dist\OrganizadorAlpha_vX.Y.Z.exe" -Force
-Remove-Item -Path "build" -Recurse -Force
+.\venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-build.txt
+New-Item -ItemType Directory -Force artifacts/release-v3.5.0 | Out-Null
+.\venv\Scripts\python.exe -m pip freeze > artifacts/release-v3.5.0/build-environment.txt
+$buildOriginalPath = $env:PATH
+$buildPythonBase = & .\venv\Scripts\python.exe -c "import sys; print(sys.base_prefix)"
+$env:PATH = "$PWD\venv\Scripts;$buildPythonBase;$env:WINDIR\System32;$env:WINDIR"
+.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --distpath artifacts/release-v3.5.0/dist --workpath artifacts/release-v3.5.0/build OrganizadorAlpha_OPTIMIZED.spec
+$env:PATH = $buildOriginalPath
 ```
 
-### Compila el .exe
-- Usando el script recomendado:
+La spec utiliza `main_fluent.py` para conservar la interfaz actual, splash y tema.
+Produce un único `Ordenasion_v3.5.0.exe`, con icono/versión PE, QtMultimedia,
+branding, Nunito/OFL, tokens y binarios auxiliares disponibles en `bin/`.
+Los hooks de Qt reúnen los recursos necesarios; no se usa `collect_all()` ni se
+agregan WebEngine, Charts, ciencia de datos o frameworks no utilizados.
+El PATH acotado evita recoger DLL de otras herramientas instaladas. ICU y UCRT
+se resuelven desde Windows; no se empaquetan copias ajenas al sistema.
+
+No empaquetes `app_config.json`, `organization_profiles.json`, categorías locales,
+bases de datos, logs, capturas ni datos personales. Los defaults están en el código.
+Los archivos locales existentes se conservan y están ignorados por Git. Antes de
+publicar revisa el índice explícito; evita `git add .` y no publiques `artifacts/`.
+
+No hay límite arbitrario de 50 MB: registra tamaño real, SHA-256 y librerías Qt
+incluidas. El archivo de entorno permite reproducir las versiones instaladas.
+No borres builds anteriores: esta versión usa su directorio propio.
+
+## 2. Smoke seguro del código y del EXE
+
+El modo opt-in cambia primero a una carpeta temporal y bloquea análisis de discos,
+organización automática, búsquedas online y escritura de metadatos. Construye la
+ventana real, comprueba assets/QtMultimedia/splash/primera pintura y cierre.
+Los errores devuelven código distinto de cero y quedan en JSON/log, sin MessageBox.
+
 ```powershell
-./compilar_exe_completo.bat
-```
-- O directamente con PyInstaller:
-```powershell
-pyinstaller --clean --noconfirm OrganizadorAlpha_OPTIMIZED.spec
-```
-
-### Verifica el ejecutable
-```powershell
-Test-Path "dist\OrganizadorAlpha_vX.Y.Z.exe"
-(Get-Item "dist\OrganizadorAlpha_vX.Y.Z.exe").Length / 1MB   # Debe ser ~40-50 MB
-```
-- Ejecuta el .exe y verifica inicio correcto (sin errores ni bloqueos, abre la ventana principal)
-- Revisa el log `dist/startup_log.txt` y que no haya errores críticos
-
-### Consideraciones clave (de GUIA_COMPILACION_EXE.md)
-- Solo usa dependencias MÍNIMAS en el .spec (PyQt6 básico, psutil)
-- NO uses `collect_all()`
-- Excluye librerías pesadas no usadas: `matplotlib`, `numpy`, `PIL`, `torch`, etc.
-- NO heredes de QObject, utiliza un QObject interno para señales (revisa `application_state.py`)
-- El nombre del .exe debe corresponder a la versión (ej: OrganizadorAlpha_v3.2.0.exe)
-
----
-
-## 2. ETIQUETA (TAG) LA VERSIÓN EN GIT
-
-```sh
-git add .
-git commit -m "Cambios para la versión vX.Y.Z"
-git tag -a vX.Y.Z -m "Release vX.Y.Z"
-git push origin vX.Y.Z
+$env:ORDENASION_SMOKE = '1'
+$env:ORDENASION_SMOKE_REPORT = (Join-Path $PWD 'artifacts/release-v3.5.0/smoke-exe.json')
+$env:QT_QPA_PLATFORM = 'offscreen'
+$buildProcess = Start-Process -FilePath 'artifacts/release-v3.5.0/dist/Ordenasion_v3.5.0.exe' -WindowStyle Hidden -Wait -PassThru
+$buildProcess.ExitCode
+Get-Content $env:ORDENASION_SMOKE_REPORT
+Remove-Item Env:ORDENASION_SMOKE, Env:ORDENASION_SMOKE_REPORT, Env:QT_QPA_PLATFORM
 ```
 
-- Cambia `X.Y.Z` por la nueva versión.
+Para comprobar código usa el mismo entorno con
+`.\venv\Scripts\python.exe main_fluent.py`. `ORDENASION_SMOKE_CAPTURE` permite
+capturar la primera ventana dentro de la carpeta de QA. Un watchdog de seguridad
+marca fallo si Qt no termina la pintura; no añade duración al arranque normal.
+No ejecutes el EXE normal sobre las carpetas del usuario durante estas pruebas.
 
----
+## 3. Revisión y publicación
 
-## 3. CREA LA RELEASE EN GITHUB Y ADJUNTA EL .EXE
+Antes de publicar: pruebas focales vigentes, smoke empaquetado con exit0, archivo
+JSON `status=ok`, versión PE correcta, assets presentes, ausencia de datos privados
+en el archivo PyInstaller y `git diff --check`. Registra tamaño y SHA-256.
 
-Desde la terminal:
-```sh
-gh release create vX.Y.Z "dist/OrganizadorAlpha_vX.Y.Z.exe" \
-  --title "Ordenasion Alpha vX.Y.Z" \
-  --notes "Release vX.Y.Z. Incluye ejecutable para Windows (.exe)."
-```
-- Cambia el nombre por el archivo generado real.
-- El tag, nombre y ejecutable deben coincidir con la versión.
-- Puedes adjuntar más archivos como txt, docs, etc.
-
----
-
-## 4. VERIFICACIÓN FINAL
-- Confirma en la pestaña "Releases" de GitHub que:
-  - El release/tag aparece como publicado
-  - El ejecutable está en "Assets"
-  - El archivo corresponde a la versión y tamaño correcto
-
----
-
-## 5. RESUMEN DE FLUJO (RÁPIDO)
-
-```sh
-# 1. Compila el .exe correctamente (ver arriba)
-# 2. Etiqueta el repo
-git add .
-git commit -m "Cambios vX.Y.Z"
-git tag -a vX.Y.Z -m "Release vX.Y.Z"
-git push origin vX.Y.Z
-# 3. Publica el release con el ejecutable
-gh release create vX.Y.Z "dist/OrganizadorAlpha_vX.Y.Z.exe" --title "Ordenasion Alpha vX.Y.Z" --notes "Release vX.Y.Z. Incluye ejecutable."
-```
-
----
-
-## Notas y Mejores Prácticas
-- El ejecutable .exe NO debe pesar más de 50MB. Si supera, revisa exclusión de dependencias.
-- Conserva registros en `startup_log.txt` y revisa advertencias `warn-*.txt` tras cada build.
-- Si gh falla, ejecuta `gh auth login`.
-- Haz este procedimiento para CADA release.
-- También puedes crear releases y subir el .exe manualmente desde la web de GitHub si es necesario.
-
----
-
-**Este documento fusiona la guía de compilación y el flujo de releases/tags para futuras versiones y garantiza releases limpios y descargables.**
+Commit, push, tag `v3.5.0` y GitHub Release requieren la autorización de publicación.
+Haz stage de archivos revisados y deja fuera la configuración local. Adjunta sólo
+`Ordenasion_v3.5.0.exe`, con las novedades numeradas de `CHANGELOG.md`; comprueba
+posteriormente el asset remoto, versión, tamaño y hash. La compilación local no
+confirma que el release esté publicado.

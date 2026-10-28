@@ -81,3 +81,11 @@ descargar*.bat
 *.bak
 *.tmp
 
+# Fuentes de empaquetado y lanzador mantenidas; no binarios ni capturas QA.
+!OrganizadorAlpha_OPTIMIZED.spec
+!arrancar_ordenasion.bat
+artifacts/
+.venv/
+app_config.json
+organization_profiles.json
+disk_health_history.json

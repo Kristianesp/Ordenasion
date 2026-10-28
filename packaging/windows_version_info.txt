@@ -1,0 +1,14 @@
+# UTF-8: metadatos PE de Ordenasion 3.5.0.
+VSVersionInfo(
+    ffi=FixedFileInfo(filevers=(3, 5, 0, 0), prodvers=(3, 5, 0, 0),
+        mask=0x3f, flags=0, OS=0x40004, fileType=0x1, subtype=0, date=(0, 0)),
+    kids=[StringFileInfo([StringTable('040904B0', [
+        StringStruct('CompanyName', 'Ordenasion'),
+        StringStruct('FileDescription', 'Ordenasion: organización de archivos'),
+        StringStruct('FileVersion', '3.5.0'),
+        StringStruct('InternalName', 'Ordenasion'),
+        StringStruct('OriginalFilename', 'Ordenasion_v3.5.0.exe'),
+        StringStruct('ProductName', 'Ordenasion'),
+        StringStruct('ProductVersion', '3.5.0')
+    ])]), VarFileInfo([VarStruct('Translation', [1033, 1200])])]
+)

@@ -821,14 +821,14 @@ class TabHeaderWidget(QWidget):
 
         self.config_btn = QPushButton("⚙️ Config")
         self.config_btn.setObjectName("tab_header_config_btn")
-        self.config_btn.setFixedHeight(32)
+        self.config_btn.setFixedHeight(UI_CONFIG["BUTTON_HEIGHT"])
         self.config_btn.setMinimumWidth(80)
         self.config_btn.clicked.connect(self.config_requested.emit)
         layout.addWidget(self.config_btn)
 
         self.tasks_btn = QPushButton("🧵 Tareas")
         self.tasks_btn.setObjectName("tab_header_tasks_btn")
-        self.tasks_btn.setFixedHeight(32)
+        self.tasks_btn.setFixedHeight(UI_CONFIG["BUTTON_HEIGHT"])
         self.tasks_btn.setMinimumWidth(80)
         self.tasks_btn.clicked.connect(self.tasks_requested.emit)
         layout.addWidget(self.tasks_btn)

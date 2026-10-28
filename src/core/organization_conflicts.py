@@ -42,12 +42,13 @@ def build_numbered_name(path: Path, counter: int) -> Path:
     return path.parent / f"{stem} ({counter}){suffix}"
 
 
-def find_available_name(path: Path) -> Path:
-    if not path.exists():
+def find_available_name(path: Path, reserved: set[Path] | None = None) -> Path:
+    reserved = reserved or set()
+    if not path.exists() and path not in reserved:
         return path
     counter = 1
     candidate = build_numbered_name(path, counter)
-    while candidate.exists():
+    while candidate.exists() or candidate in reserved:
         counter += 1
         candidate = build_numbered_name(path, counter)
     return candidate
@@ -61,8 +62,9 @@ def resolve_destination(
     base_destination: Path,
     conflict_policy: str = CONFLICT_POLICY_RENAME,
     is_folder: bool = False,
+    reserved: set[Path] | None = None,
 ) -> ConflictResolution:
-    exists = base_destination.exists()
+    exists = base_destination.exists() or base_destination in (reserved or set())
     if not exists:
         return ConflictResolution(
             destination=base_destination,
@@ -72,7 +74,7 @@ def resolve_destination(
         )
 
     if is_folder or conflict_policy == CONFLICT_POLICY_RENAME:
-        destination = find_available_name(base_destination)
+        destination = find_available_name(base_destination, reserved)
         return ConflictResolution(
             destination=destination,
             status=f"Se renombrará a {destination.name}",

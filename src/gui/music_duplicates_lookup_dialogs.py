@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 from src.core.audio_fingerprint import audio_fingerprint_service
 from src.core.audio_index import audio_metadata_service
 from src.gui.music_duplicates_lookup_presenters import build_lookup_diagnostics_payload
+from src.gui.v2.theme import apply_dialog_surface
 
 
 def show_lookup_diagnostics_dialog(view: Any, file_path: str | Path) -> None:
@@ -28,6 +29,7 @@ def show_lookup_diagnostics_dialog(view: Any, file_path: str | Path) -> None:
     if not result:
         return
     dialog = QDialog(view)
+    dialog.setObjectName("musicLookupDiagnosticsDialog")
     dialog.setWindowTitle(f"Diagnostico lookup - {Path(str(file_path)).name}")
     dialog.resize(860, 620)
     layout = QVBoxLayout(dialog)
@@ -44,6 +46,7 @@ def show_lookup_diagnostics_dialog(view: Any, file_path: str | Path) -> None:
     buttons.rejected.connect(dialog.reject)
     buttons.accepted.connect(dialog.accept)
     layout.addWidget(buttons)
+    apply_dialog_surface(dialog)
     dialog.exec()
 
 
@@ -58,6 +61,7 @@ def prompt_cover_choice(view: Any, file_path: str | Path) -> bool:
     preview_cache: dict[str, bytes | None] = {}
 
     dialog = QDialog(view)
+    dialog.setObjectName("musicCoverChoiceDialog")
     dialog.setWindowTitle(f"Elegir portada - {Path(normalized_path).name}")
     dialog.resize(860, 520)
     root = QVBoxLayout(dialog)
@@ -126,6 +130,7 @@ def prompt_cover_choice(view: Any, file_path: str | Path) -> bool:
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
     root.addWidget(buttons)
+    apply_dialog_surface(dialog)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False
 

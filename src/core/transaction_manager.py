@@ -192,10 +192,12 @@ class TransactionManager:
         """
         try:
             self.last_error = None
+            self.last_removal_destination = None
             if not file_path.exists():
                 raise FileNotFoundError(f"Archivo no existe: {file_path}")
 
             file_size = file_path.stat().st_size
+            destination = None
 
             if use_trash:
                 # Intentar mover a papelera
@@ -235,12 +237,16 @@ class TransactionManager:
                 operation_type = "delete_to_quarantine"
 
             # Registrar operación
+            self.last_removal_destination = (
+                "papelera" if operation_type == "delete_to_trash" else str(destination)
+            )
             self._log_operation(
                 OperationType.DELETE,
                 {
                     "path": str(file_path),
                     "size": file_size,
                     "operation_type": operation_type,
+                    "destination": self.last_removal_destination,
                 },
             )
 

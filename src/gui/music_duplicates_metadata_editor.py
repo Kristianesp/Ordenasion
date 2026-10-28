@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 from src.core.audio_fingerprint import audio_fingerprint_service
 from src.core.audio_index import audio_metadata_service
 from src.utils.app_config import AppConfig
+from src.gui.v2.theme import apply_dialog_surface
 from src.gui.music_duplicates_lookup_dialogs import (
     prompt_cover_choice,
     show_lookup_diagnostics_dialog,
@@ -43,6 +44,7 @@ def edit_track_metadata(view: Any, target: Path) -> None:
     current = audio_metadata_service.get_metadata(target) or {}
     initial_lookup = view._get_lookup_result(target, current)
     dialog = QDialog(view)
+    dialog.setObjectName("musicMetadataEditorDialog")
     dialog.setWindowTitle(f"Editar metadatos - {target.name}")
     dialog.resize(980, 760)
     dialog.setMinimumSize(920, 700)
@@ -99,14 +101,14 @@ def edit_track_metadata(view: Any, target: Path) -> None:
     form.addRow("Genero", genre_edit)
 
     lookup_actions = QHBoxLayout()
-    dialog_lookup_btn = QPushButton("🌐 Buscar online")
-    use_variant_btn = QPushButton("⬇ Usar variante")
+    dialog_lookup_btn = QPushButton("Buscar online")
+    use_variant_btn = QPushButton("Usar variante")
     use_variant_btn.setEnabled(False)
-    choose_cover_btn = QPushButton("🖼 Portadas")
+    choose_cover_btn = QPushButton("Portadas")
     choose_cover_btn.setEnabled(False)
-    diagnostics_btn = QPushButton("🧪 Diagnostico")
-    no_match_btn = QPushButton("🚫 No coincide")
-    skip_variant_btn = QPushButton("⏭ Omitir esta")
+    diagnostics_btn = QPushButton("Diagnóstico")
+    no_match_btn = QPushButton("No coincide")
+    skip_variant_btn = QPushButton("Omitir esta")
     skip_variant_btn.setVisible(False)
     lookup_actions.addWidget(dialog_lookup_btn)
     lookup_actions.addWidget(use_variant_btn)
@@ -311,6 +313,7 @@ def edit_track_metadata(view: Any, target: Path) -> None:
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
     root_layout.addWidget(buttons)
+    apply_dialog_surface(dialog)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         if dialog.result() == 2:
             return

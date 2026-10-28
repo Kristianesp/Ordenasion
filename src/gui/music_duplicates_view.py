@@ -158,6 +158,7 @@ from src.gui.music_duplicates_metadata_editor import edit_track_metadata
 from src.gui.music_duplicates_ui import build_duplicates_tab, build_metadata_tab
 from src.gui.music_duplicates_variant_dialog import prompt_variant_choice
 from src.gui.music_duplicates_workers import AudioLibraryWorker, AudioLookupWorker
+from src.gui.v2.theme import apply_control_sizes, bind_path_tooltip
 
 
 class MusicDuplicatesView(QWidget):
@@ -218,23 +219,26 @@ class MusicDuplicatesView(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
 
-        title = QLabel("🎵 Duplicados de Musica")
+        title = QLabel("Duplicados de música")
         title.setObjectName("main_title_label")
         layout.addWidget(title)
 
         row = QHBoxLayout()
+        row.setSpacing(10)
         self.path_input = QLineEdit()
         self.path_input.setPlaceholderText("Selecciona una carpeta de musica...")
+        bind_path_tooltip(self.path_input)
         row.addWidget(self.path_input, 1)
 
-        self.browse_btn = QPushButton("📂 Examinar")
+        self.browse_btn = QPushButton("Examinar")
         self.browse_btn.clicked.connect(self._browse)
         row.addWidget(self.browse_btn)
 
-        self.scan_btn = QPushButton("🔍 Analizar audio")
+        self.scan_btn = QPushButton("Analizar audio")
+        self.scan_btn.setObjectName("music_scan_button")
         self.scan_btn.clicked.connect(self.scan)
         row.addWidget(self.scan_btn)
         layout.addLayout(row)
@@ -260,8 +264,10 @@ class MusicDuplicatesView(QWidget):
         self.tabs = QTabWidget()
         dup_tab = build_duplicates_tab(self)
         meta_tab = build_metadata_tab(self)
-        self.tabs.addTab(dup_tab, "Duplicados")
-        self.tabs.addTab(meta_tab, "Metadatos")
+        self.tabs.addTab(meta_tab, "Biblioteca")
+        self.tabs.addTab(dup_tab, "Revisar duplicados")
+        self.tabs.addTab(self.metadata_panel, "Metadatos")
+        self.tabs.setObjectName("musicTabs")
         layout.addWidget(self.tabs, 1)
 
         self.music_toast_frame = QFrame(self)
@@ -328,6 +334,7 @@ class MusicDuplicatesView(QWidget):
         self._toast_slide_out_animation.setDuration(220)
         self._toast_slide_out_animation.setEasingCurve(QEasingCurve.Type.InCubic)
         self._position_music_toast()
+        apply_control_sizes(self)
 
     def _browse(self):
         folder = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta de musica")
@@ -613,7 +620,11 @@ class MusicDuplicatesView(QWidget):
         return find_candidate_index_for_updates(self, result, updates)
 
     def _variant_field_styles(self, edits: list[QLineEdit], active: bool):
-        style = "background-color: rgba(220, 245, 228, 0.9);" if active else ""
+        from src.gui.v2.theme import _config_from_widget, current_tokens
+        config = _config_from_widget(self)
+        tokens = current_tokens(config.get_accent_color(), config.get_theme_mode())
+        style = (f"background: {tokens.surface_alt}; color: {tokens.text_primary}; "
+                 f"border: 1px solid {tokens.success}; border-radius: 6px; padding: 5px 8px;") if active else ""
         for edit in edits:
             edit.setStyleSheet(style)
 
@@ -743,18 +754,21 @@ class MusicDuplicatesView(QWidget):
         reply = QMessageBox.question(
             self,
             "Enviar a papelera",
-            "¿Enviar a la papelera las pistas seleccionadas?\n\n"
+            f"Se retirarán {len(selected_paths)} pistas a la papelera. Si no hay soporte, se moverán a .quarantine junto a cada pista. Las copias sin seleccionar se conservan.\n\n"
             + "\n".join(f"- {Path(path).name}" for path in selected_paths[:10]),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
         deleted = []
+        destinations = []
         for file_path in selected_paths:
             path = Path(file_path)
             if self.transaction_manager.safe_delete_file(path, use_trash=True):
                 audio_metadata_service.remove_track(path)
                 deleted.append(str(path))
+                destinations.append(self.transaction_manager.last_removal_destination)
         if not deleted:
             QMessageBox.warning(
                 self, "Duplicados", "No se pudo eliminar ninguna pista seleccionada"
@@ -763,7 +777,7 @@ class MusicDuplicatesView(QWidget):
         self._remove_deleted_duplicates_from_results(deleted)
         self.refresh_library()
         self.refresh_missing_metadata()
-        self.status_update.emit(f"🗑️ Pistas enviadas a papelera: {len(deleted)}")
+        self.status_update.emit(f"Pistas retiradas: {len(deleted)}. Destino: {', '.join(dict.fromkeys(destinations))}")
 
     def _remove_deleted_duplicates_from_results(self, deleted_paths: list[str]) -> None:
         deleted_set = {str(Path(path)) for path in deleted_paths}

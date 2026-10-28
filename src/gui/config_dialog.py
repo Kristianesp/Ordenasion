@@ -38,6 +38,7 @@ from PyQt6.QtGui import QFont, QIcon, QPalette, QColor
 from src.utils.constants import COLORS, DIALOG_STYLES
 from src.core.category_manager import CategoryManager
 from src.gui.rule_panel import RulePanel
+from src.gui.v2.theme import apply_control_sizes
 
 
 class ConfigDialog(QDialog):
@@ -59,8 +60,7 @@ class ConfigDialog(QDialog):
         self.app_config = app_config_ref or self._build_app_config()
         self.focus_section = focus_section
         self.init_ui()
-        # Cargar tema actual en el combo box
-        self._load_current_theme()
+        apply_control_sizes(self, self.app_config)
         self.refresh_categories_list()
         self.load_exclusions()
         self.update_stats()
@@ -74,18 +74,12 @@ class ConfigDialog(QDialog):
 
         return AppConfig()
 
-    def _load_current_theme(self):
-        """Carga el tema actual en el combo box"""
-        try:
-            current_theme = self.app_config.get_theme()
-            if hasattr(self, "theme_combo") and self.theme_combo:
-                # Buscar el índice del tema actual
-                for i in range(self.theme_combo.count()):
-                    if self.theme_combo.itemText(i) == current_theme:
-                        self.theme_combo.setCurrentIndex(i)
-                        break
-        except:
-            pass
+    def _effective_legacy_theme(self) -> str:
+        """Paleta del modal según el modo global; no modifica preferencias."""
+        from qfluentwidgets import isDarkTheme
+        mode = self.app_config.get_theme_mode()
+        dark = mode == "dark" or (mode == "system" and isDarkTheme())
+        return "🌙 Oscuro Profesional" if dark else "🌞 Claro Elegante"
 
     def init_ui(self):
         """Inicializa la interfaz del diálogo"""
@@ -130,7 +124,7 @@ class ConfigDialog(QDialog):
 
         interface_group = QGroupBox("🎨 Configuración de Interfaz")
         interface_group.setToolTip(
-            "🎨 Personaliza la apariencia visual de la aplicación: temas y tamaños de fuente"
+            "Personaliza el tamaño de fuente de la aplicación"
         )
         interface_layout = QGridLayout(interface_group)
 
@@ -139,29 +133,20 @@ class ConfigDialog(QDialog):
         self.font_size_combo = QComboBox()
         self.font_size_combo.addItems(
             [
-                "Pequeño (10px)",
-                "Normal (12px) - Por defecto",
-                "Grande (14px)",
-                "Muy Grande (16px)",
+                "Pequeño (11px)",
+                "Normal (13px) - Por defecto",
+                "Grande (15px)",
             ]
         )
-        self.font_size_combo.setCurrentIndex(1)
+        self.font_size_combo.setCurrentIndex(
+            0 if self.app_config.get_font_size() <= 11 else 2 if self.app_config.get_font_size() >= 15 else 1
+        )
         self.font_size_combo.currentTextChanged.connect(self.on_font_size_changed)
         interface_layout.addWidget(self.font_size_combo, 0, 1)
 
-        theme_label = QLabel("🌈 Tema de color:")
-        interface_layout.addWidget(theme_label, 1, 0)
-        from src.utils.themes import ThemeManager
-
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(ThemeManager.get_theme_names())
-        self.theme_combo.currentTextChanged.connect(self.on_theme_changed)
-        interface_layout.addWidget(self.theme_combo, 1, 1)
-
         self.apply_interface_btn = QPushButton("🎨 Aplicar Cambios")
         self.apply_interface_btn.clicked.connect(self.apply_interface_changes)
-        self.apply_interface_btn.setFixedHeight(32)
-        interface_layout.addWidget(self.apply_interface_btn, 2, 0, 1, 2)
+        interface_layout.addWidget(self.apply_interface_btn, 1, 0, 1, 2)
         general_layout.addWidget(interface_group)
 
         audio_group = QGroupBox("🎵 Biblioteca musical")
@@ -250,19 +235,16 @@ class ConfigDialog(QDialog):
         cat_buttons_layout = QHBoxLayout()
         self.add_cat_btn = QPushButton("➕ Añadir")
         self.add_cat_btn.clicked.connect(self.add_category)
-        self.add_cat_btn.setFixedHeight(30)
         self.add_cat_btn.setProperty("styleClass", "success")
         cat_buttons_layout.addWidget(self.add_cat_btn)
 
         self.remove_cat_btn = QPushButton("🗑️ Eliminar")
         self.remove_cat_btn.clicked.connect(self.remove_category)
-        self.remove_cat_btn.setFixedHeight(30)
         self.remove_cat_btn.setProperty("styleClass", "danger")
         cat_buttons_layout.addWidget(self.remove_cat_btn)
 
         self.rules_btn = QPushButton("📋 Reglas")
         self.rules_btn.clicked.connect(self.open_rules_panel)
-        self.rules_btn.setFixedHeight(30)
         cat_buttons_layout.addWidget(self.rules_btn)
         categories_layout.addLayout(cat_buttons_layout)
 
@@ -278,12 +260,10 @@ class ConfigDialog(QDialog):
         ext_buttons_layout = QHBoxLayout()
         self.add_ext_btn = QPushButton("➕ Añadir")
         self.add_ext_btn.clicked.connect(self.add_extension)
-        self.add_ext_btn.setFixedHeight(30)
         ext_buttons_layout.addWidget(self.add_ext_btn)
 
         self.remove_ext_btn = QPushButton("🗑️ Eliminar")
         self.remove_ext_btn.clicked.connect(self.remove_extension)
-        self.remove_ext_btn.setFixedHeight(30)
         ext_buttons_layout.addWidget(self.remove_ext_btn)
         extensions_layout.addLayout(ext_buttons_layout)
 
@@ -296,12 +276,10 @@ class ConfigDialog(QDialog):
         cat_actions_layout = QHBoxLayout()
         self.export_btn = QPushButton("📤 Exportar")
         self.export_btn.clicked.connect(self.export_to_txt)
-        self.export_btn.setFixedHeight(30)
         cat_actions_layout.addWidget(self.export_btn)
 
         self.reset_btn = QPushButton("🔄 Restaurar")
         self.reset_btn.clicked.connect(self.reset_to_default)
-        self.reset_btn.setFixedHeight(30)
         cat_actions_layout.addWidget(self.reset_btn)
         catalog_layout.addLayout(cat_actions_layout)
 
@@ -317,7 +295,6 @@ class ConfigDialog(QDialog):
         exclusions_grid.addWidget(self.ignored_extension_input, 0, 1)
         self.add_ignored_extension_btn = QPushButton("➕ Añadir")
         self.add_ignored_extension_btn.clicked.connect(self.add_ignored_extension)
-        self.add_ignored_extension_btn.setFixedSize(28, 28)
         self.add_ignored_extension_btn.setText("+")
         self.add_ignored_extension_btn.setToolTip("Añadir extensión ignorada")
         self.add_ignored_extension_btn.setProperty("styleClass", "icon")
@@ -329,7 +306,6 @@ class ConfigDialog(QDialog):
         self.remove_ignored_extension_btn.clicked.connect(
             self.remove_selected_ignored_extension
         )
-        self.remove_ignored_extension_btn.setFixedSize(28, 28)
         self.remove_ignored_extension_btn.setText("-")
         self.remove_ignored_extension_btn.setToolTip(
             "Eliminar extensión ignorada seleccionada"
@@ -344,7 +320,6 @@ class ConfigDialog(QDialog):
         exclusions_grid.addWidget(self.protected_path_input, 2, 1)
         self.browse_protected_path_btn = QPushButton("📂 Examinar")
         self.browse_protected_path_btn.clicked.connect(self.browse_protected_path)
-        self.browse_protected_path_btn.setFixedHeight(28)
         self.browse_protected_path_btn.setProperty("styleClass", "ghost")
         exclusions_grid.addWidget(self.browse_protected_path_btn, 2, 2)
         self.protected_paths_list = QListWidget()
@@ -354,7 +329,6 @@ class ConfigDialog(QDialog):
         self.remove_protected_path_btn.clicked.connect(
             self.remove_selected_protected_path
         )
-        self.remove_protected_path_btn.setFixedSize(28, 28)
         self.remove_protected_path_btn.setText("-")
         self.remove_protected_path_btn.setToolTip(
             "Eliminar ruta protegida seleccionada"
@@ -369,7 +343,6 @@ class ConfigDialog(QDialog):
         exclusions_grid.addWidget(self.ignored_path_input, 4, 1)
         self.browse_ignored_path_btn = QPushButton("📂 Examinar")
         self.browse_ignored_path_btn.clicked.connect(self.browse_ignored_path)
-        self.browse_ignored_path_btn.setFixedHeight(28)
         self.browse_ignored_path_btn.setProperty("styleClass", "ghost")
         exclusions_grid.addWidget(self.browse_ignored_path_btn, 4, 2)
         self.ignored_paths_list = QListWidget()
@@ -377,7 +350,6 @@ class ConfigDialog(QDialog):
         exclusions_grid.addWidget(self.ignored_paths_list, 5, 0, 1, 2)
         self.remove_ignored_path_btn = QPushButton("🗑️ Eliminar")
         self.remove_ignored_path_btn.clicked.connect(self.remove_selected_ignored_path)
-        self.remove_ignored_path_btn.setFixedSize(28, 28)
         self.remove_ignored_path_btn.setText("-")
         self.remove_ignored_path_btn.setToolTip(
             "Eliminar carpeta ignorada seleccionada"
@@ -413,7 +385,7 @@ class ConfigDialog(QDialog):
         # Obtener colores del tema actual (no hardcodeados)
         from src.utils.themes import ThemeManager
 
-        theme = self.app_config.get_theme()
+        theme = self._effective_legacy_theme()
         colors = ThemeManager.get_theme_colors(theme)
 
         # Obtener categorías del gestor
@@ -455,7 +427,7 @@ class ConfigDialog(QDialog):
         # Obtener colores del tema actual
         from src.utils.themes import ThemeManager
 
-        theme = self.app_config.get_theme()
+        theme = self._effective_legacy_theme()
         colors = ThemeManager.get_theme_colors(theme)
 
         extensions = self.category_manager.get_extensions_for_category(category_name)
@@ -727,24 +699,24 @@ class ConfigDialog(QDialog):
         # El cambio se aplicará cuando se presione "Aplicar Cambios"
         pass
 
-    def on_theme_changed(self, theme_text):
-        """Maneja el cambio de tema"""
-        # El cambio se aplicará cuando se presione "Aplicar Cambios"
-        pass
-
     def apply_interface_changes(self):
         """Aplica los cambios de interfaz INMEDIATAMENTE"""
         try:
             # Obtener valores actuales
             font_size = self.get_font_size_from_combo()
-            theme_text = self.theme_combo.currentText()
+            theme_text = self.app_config.get_theme()
 
             # Guardar configuración PRIMERO
-            self.app_config.set_font_size(font_size)
-            self.app_config.set_theme(theme_text)
+            if not self.app_config.set_font_size(font_size):
+                QMessageBox.warning(self, "No se guardaron los cambios", "No se pudo guardar el tamaño de texto. La apariencia anterior sigue activa.")
+                return
 
             # Emitir señal para aplicar cambios INMEDIATAMENTE
-            self.interface_changes_requested.emit(font_size, theme_text)
+            refresh_fluent = getattr(self.parentWidget(), "refresh_fluent_appearance", None)
+            if callable(refresh_fluent):
+                refresh_fluent()
+            else:
+                self.interface_changes_requested.emit(font_size, theme_text)
 
             # Aplicar el tema a este mismo diálogo inmediatamente (después de guardar)
             # Usar QTimer para asegurar que se aplica después de que se procesen los eventos
@@ -756,7 +728,6 @@ class ConfigDialog(QDialog):
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("✅ Cambios Aplicados INMEDIATAMENTE")
             msg_box.setText(
-                f"🎨 Tema: {theme_text}\n"
                 f"📝 Tamaño: {self.get_font_size_description(font_size)}\n\n"
                 f"Los cambios se han aplicado INMEDIATAMENTE a toda la aplicación."
             )
@@ -765,8 +736,9 @@ class ConfigDialog(QDialog):
             # Aplicar el tema actual al QMessageBox
             from src.utils.themes import ThemeManager
 
-            theme_palette = ThemeManager.apply_theme_to_palette(theme_text)
-            theme_css = ThemeManager.get_css_styles(theme_text, font_size)
+            modal_theme = self._effective_legacy_theme()
+            theme_palette = ThemeManager.apply_theme_to_palette(modal_theme)
+            theme_css = ThemeManager.get_css_styles(modal_theme, font_size)
             msg_box.setPalette(theme_palette)
             msg_box.setStyleSheet(theme_css)
 
@@ -781,26 +753,20 @@ class ConfigDialog(QDialog):
         """Obtiene el tamaño de fuente en píxeles desde el combo"""
         current_text = self.font_size_combo.currentText()
         if "Pequeño" in current_text:
-            return 10
-        elif "Normal" in current_text:
-            return 12
-        elif "Grande" in current_text:
-            return 14
-        elif "Muy Grande" in current_text:
-            return 16
-        else:
-            return 12  # Por defecto
+            return 11
+        if "Normal" in current_text:
+            return 13
+        if "Grande" in current_text:
+            return 15
+        return 13  # Por defecto
 
     def get_font_size_description(self, size: int) -> str:
         """Convierte el tamaño de fuente a descripción legible"""
-        if size <= 10:
+        if size <= 11:
             return "Pequeño"
-        elif size <= 12:
+        if size <= 13:
             return "Normal (Por defecto)"
-        elif size <= 14:
-            return "Grande"
-        else:
-            return "Muy Grande"
+        return "Grande"
 
     def apply_current_theme_to_self(self):
         """Aplica el tema actual a este mismo diálogo usando el sistema mejorado"""
@@ -814,7 +780,7 @@ class ConfigDialog(QDialog):
                 QLabel,
             )
 
-            theme = self.app_config.get_theme()
+            theme = self._effective_legacy_theme()
             font_size = self.app_config.get_font_size()
 
             # Obtener colores del tema
@@ -968,7 +934,7 @@ class ConfigDialog(QDialog):
         try:
             from src.utils.themes import ThemeManager
 
-            theme = self.app_config.get_theme()
+            theme = self._effective_legacy_theme()
             font_size = self.app_config.get_font_size()
 
             # Aplicar paleta y estilos

@@ -9,6 +9,14 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont
 from typing import Callable, Optional
 
+from src.gui.v2.theme import current_tokens
+
+
+def _rgba(color: str, alpha: float) -> QColor:
+    parsed = QColor(color)
+    parsed.setAlphaF(max(0.0, min(1.0, alpha)))
+    return parsed
+
 
 class ModernSplashScreen(QSplashScreen):
     """
@@ -44,15 +52,9 @@ class ModernSplashScreen(QSplashScreen):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Fondo con gradiente
-        from PyQt6.QtGui import QLinearGradient
-
-        gradient = QLinearGradient(0, 0, 0, self._splash_height)
-        gradient.setColorAt(0, QColor("#1976d2"))
-        gradient.setColorAt(1, QColor("#0d47a1"))
-
-        # Dibujar fondo redondeado
-        painter.setBrush(gradient)
+        # Fondo plano con el acento del sistema de diseño (sin gradiente)
+        tokens = current_tokens()
+        painter.setBrush(QColor(tokens.accent))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(0, 0, self._splash_width, self._splash_height, 20, 20)
 
@@ -92,7 +94,7 @@ class ModernSplashScreen(QSplashScreen):
         if self._sub_message:
             sub_font = QFont("Segoe UI", 9)
             painter.setFont(sub_font)
-            painter.setPen(QColor("#e3f2fd"))
+            painter.setPen(self._rgba("white", 0.85))
             painter.drawText(
                 0,
                 180,
@@ -109,7 +111,7 @@ class ModernSplashScreen(QSplashScreen):
         progress_x = 40
 
         # Fondo de la barra
-        painter.setBrush(QColor("#1565c0"))
+        painter.setBrush(self._rgba(tokens.accent, 0.45))
         painter.drawRoundedRect(
             progress_x, progress_y, progress_width, progress_height, 4, 4
         )
@@ -117,7 +119,7 @@ class ModernSplashScreen(QSplashScreen):
         # Progreso actual
         if self.progress > 0:
             filled_width = int(progress_width * (self.progress / 100))
-            painter.setBrush(QColor("#4fc3f7"))
+            painter.setBrush(QColor("white"))
             painter.drawRoundedRect(
                 progress_x, progress_y, filled_width, progress_height, 4, 4
             )

@@ -1,0 +1,3 @@
+# Herramientas de compilación; no son dependencias de la aplicación.
+PyInstaller==6.22.3
+pyinstaller-hooks-contrib==2026.7

@@ -5,6 +5,7 @@ Interfaz visual consistente con el diseño principal de la aplicación
 """
 
 import os
+from datetime import datetime
 from typing import Optional, List
 from pathlib import Path
 
@@ -16,10 +17,19 @@ from PyQt6.QtWidgets import (
     QStackedWidget
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QPalette
+from PyQt6.QtGui import QBrush, QFont, QColor, QPalette
 
 from src.core.disk_manager import DiskManager, DiskInfo
+from src.gui.v2.theme import (
+    apply_control_size,
+    apply_control_sizes,
+    apply_elided_path,
+    current_tokens,
+    html_type_scale,
+    typography_scale,
+)
 from src.utils.constants import COLORS
+from src.utils.app_config import AppConfig
 from src.utils.themes import ThemeManager
 
 
@@ -29,12 +39,16 @@ class DiskViewer(QWidget):
     # Señales para comunicación con la ventana principal
     disk_selected = pyqtSignal(str)  # Emite la ruta del disco seleccionado
     analysis_requested = pyqtSignal(str)  # Emite solicitud de análisis
+    disks_refreshed = pyqtSignal(object)  # Snapshot existente, sin lecturas adicionales
     
     def __init__(self, parent=None, disk_manager=None):
         super().__init__(parent)
         # Usar la instancia compartida si se proporciona, sino None (se asignará después)
         self.disk_manager = disk_manager
         self.current_selection = None
+        self.available_disks = ()
+        self.disks_updated_at = None
+        self.disks_refresh_error = None
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_disks)
         
@@ -63,66 +77,89 @@ class DiskViewer(QWidget):
         
         # Auto-refresh desactivado para mantener la selección del usuario
         # self.refresh_timer.start(30000)
+
+    def enable_fluent_mode(self) -> None:
+        """Deja que el shell V2 controle la apariencia del visor."""
+        self.setProperty("fluentV2", True)
+        self.setStyleSheet("")
+        self.unified_header.hide()
+        self.log_text.hide()
+        for child in self.findChildren(QWidget):
+            child.setStyleSheet("")
+        for row in range(self.disks_table.rowCount()):
+            for column in (5, 6):
+                item = self.disks_table.item(row, column)
+                if item is not None:
+                    item.setBackground(QBrush())
+        apply_control_sizes(self, self._get_runtime_config())
+
+    def refresh_fluent_theme(self) -> None:
+        """Regenera el contenido enriquecido con los colores vivos del shell."""
+        if not self.property("fluentV2") or not self.current_selection:
+            return
+        self.update_selected_disk_info(self.current_selection)
+        self.update()
+        self.repaint()
     
     def init_ui(self):
         """Inicializa la interfaz de usuario con diseño ultra compacto y eficiente"""
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(0)  # SIN espaciado - log completamente pegado abajo
-        main_layout.setContentsMargins(4, 0, 4, 0)  # Sin margen superior para pegar arriba
+        main_layout.setSpacing(14)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         
         # Establecer política de tamaño para evitar redimensionamiento automático
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        self.setMinimumSize(930, 500)  # Reducido de 600 a 500 para más compacto
+        self.setMinimumSize(0, 500)  # Reducido de 600 a 500 para más compacto
         
         # Header unificado - DISEÑO SIMPLIFICADO sin QGroupBox
         unified_header = QFrame()
-        unified_header.setToolTip("🖥️ Muestra información en tiempo real del sistema: CPU, RAM, estado de seguridad y discos monitoreados")
+        self.unified_header = unified_header
+        unified_header.setToolTip("Muestra información del sistema y discos monitoreados")
         unified_header.setObjectName("system_info_group")
         unified_header.setFrameShape(QFrame.Shape.Box)
         unified_header.setLineWidth(0)
-        unified_header.setMinimumHeight(45)  # Altura fija compacta
-        unified_header.setMaximumHeight(45)  # Altura fija para evitar variaciones
+        unified_header.setMinimumHeight(56)
+        unified_header.setMaximumHeight(16777215)
         
         # Layout horizontal para información y controles
         unified_layout = QHBoxLayout(unified_header)
-        unified_layout.setContentsMargins(10, 6, 10, 6)  # Márgenes compactos
-        unified_layout.setSpacing(12)  # Espaciado adecuado
+        unified_layout.setContentsMargins(14, 8, 14, 8)
+        unified_layout.setSpacing(12)
         
         # Título simple a la izquierda
-        title_label = QLabel("🖥️ INFORMACIÓN DEL SISTEMA:")
+        title_label = QLabel("Información del sistema")
         title_label.setObjectName("system_info_title")
-        title_label.setStyleSheet("font-weight: bold; font-size: 12px;")
         unified_layout.addWidget(title_label)
         
         # Información del sistema
-        self.system_info_label = QLabel("Cargando información del sistema...")
+        self.system_info_label = QLabel("Actualiza para consultar la información del sistema.")
         self.system_info_label.setObjectName("system_info_label")
-        self.system_info_label.setWordWrap(False)  # Sin wrap para mantener en una línea
+        self.system_info_label.setWordWrap(True)
         unified_layout.addWidget(self.system_info_label, stretch=1)  # Stretch para que use el espacio disponible
         
         # Espacio para empujar controles a la derecha
         unified_layout.addStretch()
         
         # Controles de modo seguro
-        safe_mode_label = QLabel("🛡️ Modo Seguro:")
-        safe_mode_label.setToolTip("🛡️ Configuración de seguridad para proteger los datos del sistema")
+        safe_mode_label = QLabel("Modo seguro")
+        self.safe_mode_label = safe_mode_label
+        safe_mode_label.setToolTip("Protege las operaciones del disco contra modificaciones")
         safe_mode_label.setObjectName("safe_mode_label")
         unified_layout.addWidget(safe_mode_label)
         
-        self.safe_mode_checkbox = QCheckBox("Solo Lectura")
-        self.safe_mode_checkbox.setToolTip("🛡️ Cuando está activado, solo permite análisis y visualización sin modificar archivos")
+        self.safe_mode_checkbox = QCheckBox("Solo lectura")
+        self.safe_mode_checkbox.setToolTip("Solo permite análisis y visualización")
         self.safe_mode_checkbox.setChecked(True)
         self.safe_mode_checkbox.setObjectName("safe_mode_checkbox")
         self.safe_mode_checkbox.toggled.connect(self.on_safe_mode_changed)
         unified_layout.addWidget(self.safe_mode_checkbox)
         
         # Botón de refresh
-        self.refresh_btn = QPushButton("🔄 Actualizar")
-        self.refresh_btn.setToolTip("🔄 Actualiza la información de discos")
+        self.refresh_btn = QPushButton("Actualizar")
+        self.refresh_btn.setToolTip("Actualiza la información de discos")
         self.refresh_btn.setObjectName("refresh_btn")
         self.refresh_btn.clicked.connect(self.refresh_disks)
-        self.refresh_btn.setFixedHeight(26)  # Altura compacta
-        self.refresh_btn.setFixedWidth(90)  # Ancho fijo
+        self.refresh_btn.setMinimumWidth(100)
         unified_layout.addWidget(self.refresh_btn)
         
         main_layout.addWidget(unified_header)
@@ -132,8 +169,8 @@ class DiskViewer(QWidget):
         self.disks_table = QTableWidget()
         self.disks_table.setColumnCount(8)
         self.disks_table.setHorizontalHeaderLabels([
-            "💿 Unidad", "📁 Punto de Montaje", "💾 Total", "📊 Usado", 
-            "🆓 Libre", "📈 % Uso", "🛡️ Sistema", "🔍"
+            "Unidad", "Punto de montaje", "Total", "Usado",
+            "Libre", "% de uso", "Sistema", "Analizar"
         ])
         
         # 🚀 OPTIMIZACIÓN: Tabla compacta y ajustable automáticamente
@@ -142,8 +179,9 @@ class DiskViewer(QWidget):
         self.disks_table.setMaximumHeight(600)  # Máximo más alto para más discos
         self.disks_table.setRowCount(0)  # Sin filas fijas - se ajustará dinámicamente
         self.disks_table.setAlternatingRowColors(True)
-        self.disks_table.setShowGrid(True)
-        self.disks_table.setGridStyle(Qt.PenStyle.SolidLine)
+        self.disks_table.setShowGrid(False)
+        self.disks_table.setWordWrap(False)
+        self.disks_table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         # Los estilos se aplican automáticamente via themes.py
         
         # Configurar tabla
@@ -166,8 +204,8 @@ class DiskViewer(QWidget):
         # Añadir tooltips a los headers de la tabla
         header.setToolTip("💿 Unidad: Letra de la unidad del disco\n"
                          "📁 Punto de Montaje: Ruta donde está montado el disco\n"
-                         "💾 Total: Espacio total del disco\n"
-                         "📊 Usado: Espacio utilizado actualmente\n"
+                         "Total: Espacio total del disco\n"
+                         "Usado: Espacio utilizado actualmente\n"
                          "🆓 Libre: Espacio disponible\n"
                          "📈 % Uso: Porcentaje de espacio utilizado\n"
                          "🛡️ Sistema: Indica si es unidad del sistema\n"
@@ -175,17 +213,42 @@ class DiskViewer(QWidget):
         
         # La tabla usará los estilos del tema automáticamente
         self.disks_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        
-        main_layout.addWidget(self.disks_table)
+        self.disks_table.setParent(self)
+        self.disks_table.hide()
+
+        self.disk_cards_scroll = QScrollArea()
+        self.disk_cards_scroll.setObjectName("diskCardsScroll")
+        self.disk_cards_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.disk_cards_scroll.setWidgetResizable(True)
+        self.disk_cards_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.disk_cards_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.disk_cards_scroll.setMinimumHeight(150)
+        self.disk_cards_scroll.setMaximumHeight(230)
+        self.disk_cards_content = QWidget()
+        self.disk_cards_content.setObjectName("diskCardsContent")
+        self.disk_cards_layout = QGridLayout(self.disk_cards_content)
+        self.disk_cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.disk_cards_layout.setHorizontalSpacing(12)
+        self.disk_cards_layout.setVerticalSpacing(12)
+        self.disk_empty_label = QLabel("Selecciona una unidad para consultar su espacio y salud. Pulsa Actualizar para buscar unidades disponibles.")
+        self.disk_empty_label.setWordWrap(True)
+        self.disk_cards_layout.addWidget(self.disk_empty_label, 0, 0)
+        self.disk_cards_scroll.setWidget(self.disk_cards_content)
+        self._disk_cards: list[QFrame] = []
+        main_layout.addWidget(self.disk_cards_scroll)
         
         # ===== PANEL DE ANÁLISIS DEL DISCO SELECCIONADO CON LAZY LOADING =====
-        self.analysis_group = QGroupBox("🔍 ANÁLISIS DEL DISCO SELECCIONADO")
-        self.analysis_group.setToolTip("🔍 Panel de análisis detallado que se muestra cuando seleccionas un disco específico")
+        self.analysis_group = QGroupBox("Análisis del disco seleccionado")
+        self.analysis_group.setToolTip("Panel de análisis detallado del disco seleccionado")
         self.analysis_group.setObjectName("analysis_group")
         
         # Configurar política de tamaño para evitar redimensionamiento
         self.analysis_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        self.analysis_group.setMinimumHeight(400)
+        self.analysis_group.setMinimumHeight(320)
         # Remover altura máxima para permitir scroll
         
         # Cargar panel de análisis inmediatamente (sin lazy loading)
@@ -199,21 +262,21 @@ class DiskViewer(QWidget):
         headers_row.setContentsMargins(0, 0, 0, 0)
         
         # Títulos fijos para cada columna
-        self.basic_header = QLabel("💾 INFORMACIÓN BÁSICA")
+        self.basic_header = QLabel("Información básica")
         self.basic_header.setObjectName("card_header")
-        self.basic_header.setFixedHeight(50)  # Altura aumentada para mejor legibilidad
+        self.basic_header.setFixedHeight(40)
         self.basic_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         headers_row.addWidget(self.basic_header)
         
-        self.health_header = QLabel("🩺 ESTADO Y SALUD")
+        self.health_header = QLabel("Estado y salud")
         self.health_header.setObjectName("card_header")
-        self.health_header.setFixedHeight(50)  # Altura aumentada para mejor legibilidad
+        self.health_header.setFixedHeight(40)
         self.health_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         headers_row.addWidget(self.health_header)
         
-        self.content_header = QLabel("📁 CONTENIDO")
+        self.content_header = QLabel("Contenido")
         self.content_header.setObjectName("card_header")
-        self.content_header.setFixedHeight(50)  # Altura aumentada para mejor legibilidad
+        self.content_header.setFixedHeight(40)
         self.content_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         headers_row.addWidget(self.content_header)
         
@@ -319,14 +382,13 @@ class DiskViewer(QWidget):
         self.analysis_scroll_area.setWidgetResizable(True)
         self.analysis_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.analysis_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.analysis_scroll_area.setMinimumHeight(400)  # Altura mínima visible
-        self.analysis_scroll_area.setMaximumHeight(500)  # Altura máxima para pantallas 1080p
+        self.analysis_scroll_area.setMinimumHeight(280)
         self.analysis_scroll_area.setObjectName("analysis_scroll_area")
         
         # Aplicar estilos al scroll area - se aplicarán dinámicamente con el tema
         # Los estilos se aplicarán en apply_theme_styles()
         
-        main_layout.addWidget(self.analysis_scroll_area)
+        main_layout.addWidget(self.analysis_scroll_area, 1)
         
         # ===== TARJETA DE ESTADÍSTICAS I/O (MOVIDA A LA SECCIÓN DE ESPACIO) =====
         # Las métricas SMART se moverán junto a TOTAL USADO LIBRE
@@ -334,8 +396,8 @@ class DiskViewer(QWidget):
         # ===== TARJETA DE ESPACIO DE ANCHO COMPLETO =====
         self.space_card_full = QFrame()
         self.space_card_full.setObjectName("space_card_full")
-        self.space_card_full.setMaximumHeight(75)  # Reducido de 90 a 75px
-        self.space_card_full.setMinimumHeight(65)  # Reducido de 80 a 65px
+        space_min = typography_scale(AppConfig()).control_height * 2 + 16
+        self.space_card_full.setMinimumHeight(space_min)
         # Estilos se aplicarán dinámicamente con el tema en apply_theme_styles()
         
         space_card_layout = QHBoxLayout(self.space_card_full)
@@ -511,7 +573,11 @@ class DiskViewer(QWidget):
         
         # Añadir stretch para centrar el contenido
         space_card_layout.addStretch()
-        
+
+        # Sustituir la fila heredada por un resumen visual de tarjetas.
+        self._legacy_space_card = self.space_card_full
+        self._legacy_space_card.hide()
+        self.space_card_full = self._build_modern_space_card()
         main_layout.addWidget(self.space_card_full)
         
         # Log de operaciones - PEGADO ABAJO DEL TODO SIN MÁRGENES
@@ -522,8 +588,9 @@ class DiskViewer(QWidget):
         self.log_text = QTextEdit()
         self.log_text.setToolTip("📝 Historial de operaciones, errores y mensajes informativos del sistema")
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(40)  # Altura fija
-        self.log_text.setMinimumHeight(40)  # Altura mínima fija
+        log_h = typography_scale(self._get_runtime_config()).control_height
+        self.log_text.setMinimumHeight(log_h)
+        self.log_text.setMaximumHeight(log_h * 2)
         self.log_text.setObjectName("log_text")
         log_layout.addWidget(self.log_text)
         
@@ -538,6 +605,7 @@ class DiskViewer(QWidget):
         
         # Tabla dinámica: solo mostrar discos reales
         self.disks_table.setRowCount(0)
+        apply_control_sizes(self, AppConfig())
     
     def setup_connections(self):
         """Configura las conexiones de señales"""
@@ -555,10 +623,16 @@ class DiskViewer(QWidget):
                 self.log_message("⚠️ No se encontraron discos disponibles")
                 # Tabla dinámica: no crear filas vacías
                 self.disks_table.setRowCount(0)
+                self._rebuild_disk_cards([])
+                self.available_disks = ()
+                self.disks_updated_at = datetime.now()
+                self.disks_refresh_error = None
+                self.disks_refreshed.emit(self.available_disks)
                 return
             
             # Limpiar tabla
             self.disks_table.setRowCount(0)
+            valid_disks: list[tuple[int, DiskInfo]] = []
             
             # Llenar tabla con discos reales
             for i, disk in enumerate(disks):
@@ -599,7 +673,16 @@ class DiskViewer(QWidget):
                     usage_item = QTableWidgetItem(f"{disk.usage_percent:.1f}%")
                     # Color según el porcentaje usando SOLO colores del tema
                     color = self.get_usage_color_by_percentage(disk.usage_percent)
-                    usage_item.setBackground(QColor(color))
+                    if self.property("fluentV2"):
+                        tokens = current_tokens(
+                            self._get_runtime_config().get_accent_color(),
+                            self._get_runtime_config().get_theme_mode(),
+                        )
+                        usage_item.setForeground(
+                            QColor(tokens.warning if disk.usage_percent > 80 else tokens.success)
+                        )
+                    else:
+                        usage_item.setBackground(QColor(color))
                     
                     if disk.usage_percent > 90:
                         usage_item.setToolTip(f"📈 CRÍTICO: {disk.usage_percent:.1f}% del disco está lleno. ¡Libera espacio urgentemente!")
@@ -612,15 +695,26 @@ class DiskViewer(QWidget):
                     self.disks_table.setItem(i, 5, usage_item)
                     
                     # Es unidad del sistema - Solo texto
-                    system_item = QTableWidgetItem("🛡️ Sí" if disk.is_system_drive else "✅ No")
+                    system_item = QTableWidgetItem("Sí" if disk.is_system_drive else "No")
                     # Usar colores del tema para unidad del sistema
                     try:
-                        colors = ThemeManager.get_theme_colors(self.get_current_theme_name())
+                        colors = self._get_analysis_colors(self.get_current_theme_name())
                         system_color = colors['error'] if disk.is_system_drive else colors['success']
-                        system_item.setBackground(QColor(system_color))
+                        if self.property("fluentV2"):
+                            system_item.setForeground(QColor(system_color))
+                        else:
+                            system_item.setBackground(QColor(system_color))
                     except:
-                        # Fallback básico si hay error
-                        system_item.setBackground(QColor("#e74c3c" if disk.is_system_drive else "#27ae60"))
+                        # Fallback con tokens del sistema de diseño
+                        try:
+                            tokens = current_tokens()
+                            fallback_color = tokens.danger if disk.is_system_drive else tokens.success
+                        except Exception:
+                            fallback_color = "#e74c3c" if disk.is_system_drive else "#27ae60"
+                        if self.property("fluentV2"):
+                            system_item.setForeground(QColor(fallback_color))
+                        else:
+                            system_item.setBackground(QColor(fallback_color))
                     
                     if disk.is_system_drive:
                         system_item.setToolTip("🛡️ UNIDAD DEL SISTEMA: Contiene archivos críticos del sistema. ¡Manipular con precaución!")
@@ -634,26 +728,36 @@ class DiskViewer(QWidget):
                     action_layout.setContentsMargins(2, 8, 2, 8)  # Padding vertical reducido para filas compactas
                     action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)  # Centrar el botón
                     
-                    select_btn = QPushButton("🔍 Analizar")
-                    select_btn.setToolTip(f"🔍 Analiza el disco {disk.mountpoint} y permite organizar archivos por categorías")
+                    select_btn = QPushButton("Analizar")
+                    select_btn.setToolTip(f"Analiza el disco {disk.mountpoint} y permite organizar archivos por categorías")
                     select_btn.setObjectName("select_btn")
-                    select_btn.setFixedHeight(28)  # Altura reducida para filas compactas
-                    select_btn.setFixedWidth(120)  # Ancho fijo para ajuste perfecto
+                    select_btn.setMinimumWidth(104)
+                    apply_control_size(select_btn, self._get_runtime_config())
                     select_btn.clicked.connect(self.create_analyze_handler(i))
                     action_layout.addWidget(select_btn)
                     
                     self.disks_table.setCellWidget(i, 7, action_widget)
+                    valid_disks.append((i, disk))
                     
                 except Exception as disk_error:
                     self.log_message(f"⚠️ Error al procesar disco {i}: {str(disk_error)}")
                     continue
             
+            self._rebuild_disk_cards(valid_disks)
+            apply_control_sizes(self, self._get_runtime_config())
+
             # 🚀 OPTIMIZACIÓN: Ajustar altura de tabla automáticamente
             self.adjust_table_height()
             
             # Actualizar información del sistema
             self.update_system_info()
+            self.available_disks = tuple(disk for _, disk in valid_disks)
+            self.disks_updated_at = datetime.now()
+            self.disks_refresh_error = None
+            self.disks_refreshed.emit(self.available_disks)
         except Exception as e:
+            self.disks_refresh_error = str(e)
+            self.disks_refreshed.emit(self.available_disks)
             error_msg = f"❌ Error al actualizar discos: {str(e)}"
             self.log_message(error_msg)
             QMessageBox.critical(
@@ -696,6 +800,228 @@ class DiskViewer(QWidget):
                 first_mountpoint = first_disk_item.text()
                 self.update_selected_disk_info(first_mountpoint)
                 self.log_message(f"🔍 Disco seleccionado automáticamente: {first_mountpoint}")
+
+    def _rebuild_disk_cards(self, disks: list[tuple[int, DiskInfo]]) -> None:
+        """Construye una vista compacta de tarjetas sin romper la tabla interna."""
+        while self.disk_cards_layout.count():
+            item = self.disk_cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._disk_cards.clear()
+
+        if not disks:
+            empty_label = QLabel("No se encontraron unidades disponibles.")
+            empty_label.setObjectName("diskCardsEmpty")
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.disk_cards_layout.addWidget(empty_label, 0, 0, 1, 4)
+            return
+
+        columns = min(4, max(1, len(disks)))
+        for column in range(columns):
+            self.disk_cards_layout.setColumnStretch(column, 1)
+
+        for position, (row, disk) in enumerate(disks):
+            card = self._create_disk_card(row, disk)
+            self._disk_cards.append(card)
+            self.disk_cards_layout.addWidget(
+                card,
+                position // columns,
+                position % columns,
+            )
+
+        self._sync_disk_card_selection()
+
+    def _create_disk_card(self, row: int, disk: DiskInfo) -> QFrame:
+        """Crea una tarjeta de producto para una unidad."""
+        card = QFrame()
+        card.setObjectName("diskProductCard")
+        card.setProperty("diskRow", row)
+        card.setProperty("selected", False)
+        card.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        card.setMinimumHeight(148)
+        card.setToolTip(f"Unidad {disk.drive_letter or 'N/A'}: {disk.mountpoint}")
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(8)
+
+        heading = QHBoxLayout()
+        heading.setSpacing(8)
+        drive_label = QLabel(
+            f"{disk.drive_letter}:" if disk.drive_letter else "Unidad"
+        )
+        drive_label.setObjectName("diskCardDrive")
+        heading.addWidget(drive_label)
+        mount_label = QLabel(disk.mountpoint)
+        mount_label.setObjectName("diskCardMount")
+        apply_elided_path(mount_label, disk.mountpoint)
+        heading.addWidget(mount_label, 1)
+        status_label = QLabel("Sistema" if disk.is_system_drive else "Datos")
+        status_label.setObjectName("diskCardBadge")
+        status_label.setProperty(
+            "status",
+            "system" if disk.is_system_drive else "data",
+        )
+        heading.addWidget(status_label)
+        card_layout.addLayout(heading)
+
+        usage_row = QHBoxLayout()
+        usage_row.setSpacing(8)
+        usage_progress = QProgressBar()
+        usage_progress.setObjectName("diskCardProgress")
+        usage_progress.setRange(0, 100)
+        usage_progress.setValue(round(disk.usage_percent))
+        usage_progress.setTextVisible(False)
+        usage_progress.setFixedHeight(7)
+        usage_row.addWidget(usage_progress, 1)
+        usage_label = QLabel(f"{disk.usage_percent:.1f}% usado")
+        usage_label.setObjectName("diskCardUsage")
+        usage_row.addWidget(usage_label)
+        card_layout.addLayout(usage_row)
+
+        details = QHBoxLayout()
+        details.setSpacing(10)
+        for label, value in (
+            ("Total", self.disk_manager.format_size(disk.total_size)),
+            ("Usado", self.disk_manager.format_size(disk.used_size)),
+            ("Libre", self.disk_manager.format_size(disk.free_size)),
+        ):
+            metric = QLabel(f"<b>{label}</b><br>{value}")
+            metric.setObjectName("diskCardMetric")
+            metric.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            details.addWidget(metric, 1)
+        card_layout.addLayout(details)
+
+        analyze_button = QPushButton("Analizar")
+        analyze_button.setObjectName("diskCardAnalyze")
+        apply_control_size(analyze_button, self._get_runtime_config())
+        analyze_button.clicked.connect(
+            lambda _checked=False, disk_row=row: self.on_analyze_and_organize(
+                disk_row
+            )
+        )
+        card_layout.addWidget(analyze_button)
+        return card
+
+    def _sync_disk_card_selection(self) -> None:
+        """Refleja en las tarjetas la unidad seleccionada internamente."""
+        current_row = self.disks_table.currentRow()
+        for card in self._disk_cards:
+            selected = card.property("diskRow") == current_row
+            card.setProperty("selected", selected)
+            card.style().unpolish(card)
+            card.style().polish(card)
+            card.update()
+
+    def _build_modern_space_card(self) -> QFrame:
+        """Construye un resumen de espacio y SMART en tarjetas legibles."""
+        card = QFrame()
+        card.setObjectName("space_card_full")
+        card.setMinimumHeight(126)
+        card.setMaximumHeight(156)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(10, 10, 10, 10)
+        card_layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+        usage_card = QFrame()
+        usage_card.setObjectName("spaceUsageCard")
+        usage_layout = QVBoxLayout(usage_card)
+        usage_layout.setContentsMargins(10, 8, 10, 8)
+        usage_layout.setSpacing(6)
+        usage_heading = QHBoxLayout()
+        self.progress_label = QLabel("Uso del disco")
+        self.progress_label.setObjectName("spaceCardLabel")
+        usage_heading.addWidget(self.progress_label)
+        self.usage_percent_label = QLabel("—")
+        self.usage_percent_label.setObjectName("spaceCardPercent")
+        self.usage_percent_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        usage_heading.addWidget(self.usage_percent_label)
+        usage_layout.addLayout(usage_heading)
+        self.usage_progress_bar = QProgressBar()
+        self.usage_progress_bar.setObjectName("usage_progress_bar")
+        self.usage_progress_bar.setRange(0, 100)
+        self.usage_progress_bar.setValue(0)
+        self.usage_progress_bar.setTextVisible(False)
+        self.usage_progress_bar.setFixedHeight(8)
+        self.usage_progress_bar.setToolTip("Porcentaje de espacio utilizado")
+        usage_layout.addWidget(self.usage_progress_bar)
+        top_row.addWidget(usage_card, 2)
+
+        for title, attribute in (
+            ("Total", "total_size_label"),
+            ("Usado", "used_size_label"),
+            ("Libre", "free_size_label"),
+        ):
+            metric_card, value_label = self._create_space_metric_card(
+                title,
+                "—",
+                "spaceMetricCard",
+            )
+            setattr(self, attribute, value_label)
+            top_row.addWidget(metric_card, 1)
+        card_layout.addLayout(top_row)
+
+        smart_row = QHBoxLayout()
+        smart_row.setSpacing(8)
+        smart_metrics = (
+            ("Lecturas", "reads_label", "read_count_label", "—"),
+            ("Escrituras", "writes_label", "write_count_label", "—"),
+            ("Datos leídos", "read_data_header_label", "read_data_label", "—"),
+            ("Datos escritos", "write_data_header_label", "write_data_label", "—"),
+            ("Temperatura", None, "temperature_label", "--"),
+            ("Horas encendido", None, "power_hours_label", "--"),
+            ("Ciclos", None, "power_cycles_label", "--"),
+        )
+        for title, header_attribute, value_attribute, default_value in smart_metrics:
+            metric_card, value_label = self._create_space_metric_card(
+                title,
+                default_value,
+                "smartMetricCard",
+            )
+            header_label = metric_card.findChild(QLabel, "smartMetricLabel")
+            if header_attribute:
+                setattr(self, header_attribute, header_label)
+            setattr(self, value_attribute, value_label)
+            smart_row.addWidget(metric_card, 1)
+        card_layout.addLayout(smart_row)
+        return card
+
+    @staticmethod
+    def _create_space_metric_card(
+        title: str,
+        value: str,
+        object_name: str,
+    ) -> tuple[QFrame, QLabel]:
+        """Crea una tarjeta de métrica con jerarquía clara de título y valor."""
+        card = QFrame()
+        card.setObjectName(object_name)
+        card.setMinimumWidth(0)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(9, 7, 9, 7)
+        card_layout.setSpacing(3)
+        header = QLabel(title)
+        header.setObjectName(
+            "smartMetricLabel" if object_name == "smartMetricCard" else "spaceCardLabel"
+        )
+        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.setWordWrap(True)
+        card_layout.addWidget(header)
+        value_label = QLabel(value)
+        value_label.setObjectName(
+            "smartMetricValue" if object_name == "smartMetricCard" else "spaceCardValue"
+        )
+        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        value_label.setWordWrap(True)
+        card_layout.addWidget(value_label)
+        return card, value_label
     
     def _fill_empty_row(self, row_index: int):
         """Llena una fila vacía con información de placeholder para mantener el layout"""
@@ -728,7 +1054,7 @@ class DiskViewer(QWidget):
             # Porcentaje de uso
             usage_item = QTableWidgetItem("---")
             try:
-                colors = ThemeManager.get_theme_colors(self.get_current_theme_name())
+                colors = self._get_analysis_colors(self.get_current_theme_name())
                 usage_item.setBackground(QColor(colors['border']))
             except:
                 usage_item.setBackground(QColor("#bdc3c7"))
@@ -738,7 +1064,7 @@ class DiskViewer(QWidget):
             # Es unidad del sistema - Solo texto (deshabilitado)
             system_item = QTableWidgetItem("---")
             try:
-                colors = ThemeManager.get_theme_colors(self.get_current_theme_name())
+                colors = self._get_analysis_colors(self.get_current_theme_name())
                 system_item.setBackground(QColor(colors['border']))
             except:
                 system_item.setBackground(QColor("#bdc3c7"))
@@ -755,9 +1081,9 @@ class DiskViewer(QWidget):
             select_btn.setToolTip("⏳ Esta fila está reservada para futuros discos")
             select_btn.setObjectName("select_btn")
             select_btn.setEnabled(False)
-            select_btn.setFixedHeight(32)  # Altura ajustada para celda
-            select_btn.setFixedWidth(120)  # Ancho fijo para consistencia
+            select_btn.setMinimumWidth(104)
             select_btn.setProperty("styleClass", "disabled")  # Usa color disabled del tema
+            apply_control_size(select_btn, self._get_runtime_config())
             action_layout.addWidget(select_btn)
             
             self.disks_table.setCellWidget(row_index, 7, action_widget)
@@ -828,6 +1154,7 @@ class DiskViewer(QWidget):
     def on_disk_selection_changed(self):
         """Maneja el cambio de selección en la tabla de discos"""
         current_row = self.disks_table.currentRow()
+        self._sync_disk_card_selection()
         if current_row >= 0:
             mountpoint = self.disks_table.item(current_row, 1).text()
             self.current_selection = mountpoint
@@ -1105,11 +1432,11 @@ class DiskViewer(QWidget):
                         pass
 
                     # Añadir información I/O a la tarjeta básica (versión resumida)
-                    colors = ThemeManager.get_theme_colors(current_theme)
+                    colors = self._get_analysis_colors(current_theme)
                     read_count_safe = io_stats.get('read_count', 0) or 0
                     write_count_safe = io_stats.get('write_count', 0) or 0
                     basic_text += f"""
-                    <div style="margin-top: 10px; padding: 8px; background-color: {colors['surface']}; border-radius: 6px; border-left: 4px solid {colors['primary']};">
+                    <div style="margin-top: 10px; padding: 8px; background-color: {self._rgba(colors['primary'], 0.10)}; border-radius: 8px; border: 1px solid {colors['border']}; border-left: 4px solid {colors['primary']};">
                         <div style="color: {colors['primary']}; font-weight: bold; margin-bottom: 5px;">📊 I/O: {read_count_safe:,} lecturas, {write_count_safe:,} escrituras</div>
                     </div>
                     """
@@ -1120,10 +1447,10 @@ class DiskViewer(QWidget):
                     if hasattr(psutil, 'sensors_temperatures'):
                         temps = psutil.sensors_temperatures()
                         if temps:
-                            colors = ThemeManager.get_theme_colors(current_theme)
+                            colors = self._get_analysis_colors(current_theme)
                             basic_text += f"""
-                            <div style="margin-top: 10px; padding: 8px; background-color: {colors['surface']}; border-radius: 6px; border-left: 4px solid {colors['warning']};">
-                                <span style="color: {colors['warning']}; font-weight: bold;">🌡️ Temperatura:</span> 
+                            <div style="margin-top: 10px; padding: 8px; background-color: {self._rgba(colors['warning'], 0.10)}; border-radius: 8px; border: 1px solid {colors['border']}; border-left: 4px solid {colors['warning']};">
+                                <span style="color: {colors['warning']}; font-weight: bold;">Temperatura:</span>
                                 <span style="color: {colors['text_primary']};">Monitoreo disponible</span>
                             </div>
                             """
@@ -1153,9 +1480,9 @@ class DiskViewer(QWidget):
             health_data = self.disk_manager.get_disk_health_status(mountpoint)
             
             # Determinar color y estado visual basado en la puntuación usando colores del tema
-            colors = ThemeManager.get_theme_colors(current_theme)
+            colors = self._get_analysis_colors(current_theme)
             
-            score = health_data.get('score', 0)
+            score = health_data.get('score') or 0
             if score >= 90:
                 status_color = colors['success']
                 status_icon = "🟢"
@@ -1194,6 +1521,10 @@ class DiskViewer(QWidget):
                     
                     # Actualizar la barra de progreso de uso
                     self.usage_progress_bar.setValue(int(disk_info.usage_percent))
+                    if hasattr(self, "usage_percent_label"):
+                        self.usage_percent_label.setText(
+                            f"{disk_info.usage_percent:.1f}%"
+                        )
                     
                     # Actualizar colores de la barra según el porcentaje y tema
                     self.update_usage_progress_colors(current_theme, disk_info.usage_percent)
@@ -1270,9 +1601,9 @@ class DiskViewer(QWidget):
                     
                     # Aviso si se alcanzó el límite
                     if limit_reached:
-                        colors = ThemeManager.get_theme_colors(current_theme)
+                        colors = self._get_analysis_colors(current_theme)
                         content_text += f"""
-                        <div style="padding: 8px; background-color: {colors['surface']}; border-radius: 6px; border-left: 4px solid {colors['primary']};">
+                        <div style="padding: 8px; background-color: {self._rgba(colors['primary'], 0.08)}; border-radius: 8px; border: 1px solid {colors['border']}; border-left: 4px solid {colors['primary']};">
                             <span style="color: {colors['primary']}; font-weight: bold;">⚠️ Nota:</span> 
                             <span style="color: {colors['text_primary']};">Análisis limitado a 10,000 elementos para mejor rendimiento</span>
                         </div>
@@ -1429,9 +1760,9 @@ class DiskViewer(QWidget):
                 
                 # Aviso si se alcanzó el límite
                 if limit_reached:
-                    colors = ThemeManager.get_theme_colors(current_theme)
+                    colors = self._get_analysis_colors(current_theme)
                     content_text += f"""
-                    <div style="padding: 8px; background-color: {colors['surface']}; border-radius: 6px; border-left: 4px solid {colors['primary']};">
+                    <div style="padding: 8px; background-color: {self._rgba(colors['primary'], 0.08)}; border-radius: 8px; border: 1px solid {colors['border']}; border-left: 4px solid {colors['primary']};">
                         <span style="color: {colors['primary']}; font-weight: bold;">⚠️ Nota:</span> 
                         <span style="color: {colors['text_primary']};">Análisis limitado a 10,000 elementos para mejor rendimiento</span>
                     </div>
@@ -1524,6 +1855,10 @@ class DiskViewer(QWidget):
                     
                     # Actualizar la barra de progreso de uso
                     self.usage_progress_bar.setValue(int(disk_info.usage_percent))
+                    if hasattr(self, "usage_percent_label"):
+                        self.usage_percent_label.setText(
+                            f"{disk_info.usage_percent:.1f}%"
+                        )
                     
                     # Actualizar colores de la barra según el porcentaje y tema
                     self.update_usage_progress_colors(current_theme, disk_info.usage_percent)
@@ -1578,7 +1913,7 @@ class DiskViewer(QWidget):
                         QLabel {{
                             color: {colors['text_primary']} !important;
                             background-color: transparent;
-                            font-size: 12px;
+                            font-size: {self._type_px("small")}px;
                             font-weight: bold;
                             padding: 0px 5px;
                         }}
@@ -1590,7 +1925,7 @@ class DiskViewer(QWidget):
                     QLabel {{
                         color: {colors['text_primary']} !important;
                         background-color: transparent;
-                        font-size: 12px;
+                        font-size: {self._type_px("small")}px;
                         font-weight: normal;
                         padding: 0px 5px;
                     }}
@@ -1603,7 +1938,7 @@ class DiskViewer(QWidget):
                         QLabel {{
                             color: {colors['text_primary']} !important;
                             background-color: transparent;
-                            font-size: 11px;
+                            font-size: {self._type_px("small")}px;
                             padding: 0px 3px;
                         }}
                     """)
@@ -1614,7 +1949,7 @@ class DiskViewer(QWidget):
                     QCheckBox {{
                         color: {colors['text_primary']} !important;
                         background-color: transparent;
-                        font-size: 11px;
+                        font-size: {self._type_px("small")}px;
                         padding: 0px 3px;
                     }}
                     QCheckBox::indicator {{
@@ -1638,7 +1973,7 @@ class DiskViewer(QWidget):
                         color: white !important;
                         border: none !important;
                         border-radius: 4px;
-                        font-size: 11px;
+                        font-size: {self._type_px("small")}px;
                         font-weight: bold;
                         padding: 4px 10px;
                     }}
@@ -1660,7 +1995,7 @@ class DiskViewer(QWidget):
                             color: white !important;
                             border: none !important;
                             border-radius: 6px;
-                            font-size: 11px;
+                            font-size: {self._type_px("small")}px;
                             font-weight: bold;
                             padding: 6px 12px;
                         }}
@@ -1681,8 +2016,8 @@ class DiskViewer(QWidget):
                 self.analysis_group.setStyleSheet(f"""
                     QGroupBox {{
                         background-color: {colors['background']};
-                        border: 2px solid {colors['border']};
-                        border-radius: 15px;
+                        border: 1px solid {colors['border']};
+                        border-radius: 12px;
                         margin-top: 10px;
                         padding-top: 10px;
                         font-weight: bold;
@@ -1693,7 +2028,7 @@ class DiskViewer(QWidget):
                         left: 20px;
                         padding: 0 15px 0 15px;
                         color: {colors['primary']};
-                        font-size: 15px;
+                        font-size: {self._type_px("title")}px;
                         font-weight: bold;
                     }}
                 """)
@@ -1728,7 +2063,7 @@ class DiskViewer(QWidget):
                         border-radius: 10px;
                         text-align: center;
                         font-weight: bold;
-                        font-size: 12px;
+                        font-size: {self._type_px("small")}px;
                         min-height: 20px;
                         margin: 8px 0;
                         background-color: {colors['surface']};
@@ -1763,7 +2098,7 @@ class DiskViewer(QWidget):
                             QLabel {{
                                 color: {label_color} !important;
                                 font-weight: bold;
-                                font-size: 11px;
+                                font-size: {self._type_px("small")}px;
                                 text-align: center;
                                 padding: 3px;
                             }}
@@ -1788,7 +2123,7 @@ class DiskViewer(QWidget):
                             QLabel {{
                                 color: {text_color} !important;
                                 font-weight: bold;
-                                font-size: 12px;
+                                font-size: {self._type_px("small")}px;
                                 text-align: center;
                                 padding: 4px 8px;
                                 background-color: {colors['surface']};
@@ -1848,7 +2183,7 @@ class DiskViewer(QWidget):
                     QLabel {{
                         color: {colors['accent']} !important;
                         font-weight: bold;
-                        font-size: 12px;
+                        font-size: {self._type_px("small")}px;
                         text-align: center;
                     }}
                 """)
@@ -1861,7 +2196,7 @@ class DiskViewer(QWidget):
                             QLabel {{
                                 color: {colors['accent']} !important;
                                 font-weight: bold;
-                                font-size: 11px;
+                                font-size: {self._type_px("small")}px;
                                 text-align: center;
                             }}
                         """)
@@ -1870,7 +2205,7 @@ class DiskViewer(QWidget):
                             QLabel {{
                                 color: {colors['error']} !important;
                                 font-weight: bold;
-                                font-size: 11px;
+                                font-size: {self._type_px("small")}px;
                                 text-align: center;
                             }}
                         """)
@@ -1879,7 +2214,7 @@ class DiskViewer(QWidget):
                             QLabel {{
                                 color: {colors['success']} !important;
                                 font-weight: bold;
-                                font-size: 11px;
+                                font-size: {self._type_px("small")}px;
                                 text-align: center;
                             }}
                         """)
@@ -1899,7 +2234,7 @@ class DiskViewer(QWidget):
                             QLabel {{
                                 color: {text_color} !important;
                                 font-weight: bold;
-                                font-size: 12px;
+                                font-size: {self._type_px("small")}px;
                                 text-align: center;
                                 padding: 4px 8px;
                                 background-color: {colors['surface']};
@@ -1940,11 +2275,13 @@ class DiskViewer(QWidget):
     def apply_theme_styles(self, theme_name: str):
         """Aplica los estilos del tema a todos los elementos del análisis de disco"""
         try:
+            if self.property("fluentV2"):
+                return
             # Marcar que estamos aplicando estilos para evitar recursión infinita
             self._applying_theme_styles = True
             
             # Obtener colores del tema
-            colors = ThemeManager.get_theme_colors(theme_name)
+            colors = self._get_analysis_colors(theme_name)
             
             # PASO 0: LIMPIAR estilos anteriores primero
             # Limpiar estilos de todos los widgets para evitar mezcla de temas
@@ -1968,7 +2305,7 @@ class DiskViewer(QWidget):
                     QLabel {{
                         color: {colors['text_primary']} !important;
                         background-color: transparent;
-                        font-size: 13px;
+                        font-size: {self._type_px("body")}px;
                         line-height: 1.5;
                         padding: 0;
                     }}
@@ -1980,7 +2317,7 @@ class DiskViewer(QWidget):
                     QLabel {{
                         color: {colors['text_primary']} !important;
                         background-color: transparent;
-                        font-size: 13px;
+                        font-size: {self._type_px("body")}px;
                         line-height: 1.5;
                         padding: 0;
                     }}
@@ -1992,7 +2329,7 @@ class DiskViewer(QWidget):
                     QLabel {{
                         color: {colors['text_primary']} !important;
                         background-color: transparent;
-                        font-size: 13px;
+                        font-size: {self._type_px("body")}px;
                         line-height: 1.4;
                         padding: 0;
                     }}
@@ -2011,7 +2348,7 @@ class DiskViewer(QWidget):
                         QLabel {{
                             color: {colors['primary']} !important;
                             font-weight: bold;
-                            font-size: 15px;
+                            font-size: {self._type_px("title")}px;
                             padding: 8px 12px;
                             border-bottom: 3px solid {colors['primary']};
                             margin-bottom: 10px;
@@ -2053,7 +2390,7 @@ class DiskViewer(QWidget):
                             QLabel {{
                                 color: {text_color} !important;
                                 font-weight: bold;
-                                font-size: 12px;
+                                font-size: {self._type_px("small")}px;
                                 text-align: center;
                                 padding: 4px 8px;
                                 background-color: {colors['surface']};
@@ -2109,7 +2446,7 @@ class DiskViewer(QWidget):
     def apply_progress_bar_styles(self, theme_name: str):
         """Aplica estilos dinámicos y gradientes a las barras de progreso según el tema"""
         try:
-            colors = ThemeManager.get_theme_colors(theme_name)
+            colors = self._get_analysis_colors(theme_name)
             
             # Estilos base para barra de análisis
             if hasattr(self, 'analysis_progress') and self.analysis_progress:
@@ -2119,7 +2456,7 @@ class DiskViewer(QWidget):
                         border-radius: 10px;
                         text-align: center;
                         font-weight: bold;
-                        font-size: 12px;
+                        font-size: {self._type_px("small")}px;
                         min-height: 20px;
                         margin: 8px 0;
                         background-color: {colors['surface']};
@@ -2146,7 +2483,7 @@ class DiskViewer(QWidget):
     def update_usage_progress_colors(self, theme_name: str, usage_percent: float):
         """Actualiza los colores de la barra de uso según el porcentaje y tema"""
         try:
-            colors = ThemeManager.get_theme_colors(theme_name)
+            colors = self._get_analysis_colors(theme_name)
             
             # Determinar colores según el porcentaje de uso - SOLO DEL TEMA
             if usage_percent > 90:
@@ -2174,15 +2511,11 @@ class DiskViewer(QWidget):
             if hasattr(self, 'usage_progress_bar') and self.usage_progress_bar:
                 self.usage_progress_bar.setStyleSheet(f"""
                     QProgressBar {{
-                        border: 2px solid {border_color};
-                        border-radius: 10px;
-                        text-align: center;
-                        font-weight: bold;
-                        font-size: 12px;
-                        min-height: 16px;
-                        max-height: 16px;
+                        border: 1px solid {border_color};
+                        border-radius: 4px;
+                        min-height: 8px;
+                        max-height: 8px;
                         background-color: {colors['surface']};
-                        color: {colors['text_primary']};
                     }}
                     QProgressBar::chunk {{
                         background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -2190,7 +2523,7 @@ class DiskViewer(QWidget):
                             stop:0.3 {gradient_color},
                             stop:0.7 {bar_color},
                             stop:1 {gradient_color});
-                        border-radius: 8px;
+                        border-radius: 4px;
                     }}
                 """)
                 
@@ -2200,7 +2533,7 @@ class DiskViewer(QWidget):
     def get_themed_html_box(self, theme_name: str, box_type: str, title: str, content: str, icon: str = "") -> str:
         """Genera HTML con colores del tema actual para las cajas de información - SIN COLORES HARDCODEADOS"""
         try:
-            colors = ThemeManager.get_theme_colors(theme_name)
+            colors = self._get_analysis_colors(theme_name)
             
             # USAR SOLO COLORES DEL TEMA - Sin fallbacks hardcodeados
             bg_color = colors['surface']
@@ -2221,35 +2554,90 @@ class DiskViewer(QWidget):
                 title_color = colors['primary']
             
             return f"""
-            <div style="margin-bottom: 10px; padding: 10px; background-color: {bg_color}; border-radius: 6px; border-left: 4px solid {border_color};">
-                <div style="color: {title_color}; font-weight: bold; margin-bottom: 5px;">{icon} {title}</div>
+            <div style="margin-bottom: 8px; padding: 8px 10px; background-color: {bg_color}; border: 1px solid {colors['border']}; border-radius: 9px; border-left: 4px solid {border_color};">
+                <div style="color: {title_color}; font-weight: bold; margin-bottom: 4px;">{icon} {title}</div>
                 <div style="color: {text_color};">{content}</div>
             </div>
             """
         except Exception as e:
             # Fallback usando colores del tema actual si hay error
             try:
-                colors = ThemeManager.get_theme_colors(self.get_current_theme_name())
+                colors = self._get_analysis_colors(self.get_current_theme_name())
                 return f"""
-                <div style="margin-bottom: 10px; padding: 10px; background-color: {colors['surface']}; border-radius: 6px; border-left: 4px solid {colors['border']};">
-                    <div style="color: {colors['text_primary']}; font-weight: bold; margin-bottom: 5px;">{icon} {title}</div>
+                <div style="margin-bottom: 8px; padding: 8px 10px; background-color: {colors['surface']}; border: 1px solid {colors['border']}; border-radius: 9px; border-left: 4px solid {colors['border']};">
+                    <div style="color: {colors['text_primary']}; font-weight: bold; margin-bottom: 4px;">{icon} {title}</div>
                     <div style="color: {colors['text_primary']};">{content}</div>
                 </div>
                 """
             except:
-                # Último fallback - tema por defecto
+                # Último fallback - tokens del sistema de diseño
+                from src.gui.v2.theme import current_tokens as _ct
+
+                _tokens = _ct()
                 return f"""
-                <div style="margin-bottom: 10px; padding: 10px; background-color: #f8f9fa; border-radius: 6px; border-left: 4px solid #6c757d;">
-                    <div style="color: #495057; font-weight: bold; margin-bottom: 5px;">{icon} {title}</div>
-                    <div style="color: #495057;">{content}</div>
+                <div style="margin-bottom: 10px; padding: 10px; background-color: {_tokens.surface_alt}; border-radius: 6px; border-left: 4px solid {_tokens.stroke};">
+                    <div style="color: {_tokens.text_primary}; font-weight: bold; margin-bottom: 5px;">{icon} {title}</div>
+                    <div style="color: {_tokens.text_primary};">{content}</div>
                 </div>
                 """
     
+    @staticmethod
+    def _rgba(color: str, alpha: float) -> str:
+        """Convierte un color hexadecimal a RGBA compatible con Qt Rich Text."""
+        parsed = QColor(color)
+        if not parsed.isValid():
+            return color
+        return (
+            f"rgba({parsed.red()}, {parsed.green()}, {parsed.blue()}, "
+            f"{max(0.0, min(1.0, alpha)):.2f})"
+        )
+
+    def _type_px(self, role: str) -> int:
+        """Tamaño de fuente HTML alineado con los tokens de tipografía."""
+        return html_type_scale(self._get_runtime_config())[role]
+
+    def _get_runtime_config(self) -> AppConfig:
+        """Busca la configuración viva del shell para reflejar cambios inmediatos."""
+        widget = self
+        while widget is not None:
+            config = getattr(widget, "config", None)
+            if isinstance(config, AppConfig):
+                return config
+            widget = widget.parentWidget()
+        return AppConfig()
+
+    def _get_analysis_colors(self, theme_name: Optional[str] = None) -> dict[str, str]:
+        """Devuelve colores coherentes con el shell Fluent o con el tema legado."""
+        if self.property("fluentV2"):
+            config = self._get_runtime_config()
+            tokens = current_tokens(
+                config.get_accent_color(),
+                config.get_theme_mode(),
+            )
+            return {
+                "primary": tokens.accent,
+                "secondary": tokens.text_secondary,
+                "accent": tokens.accent,
+                "background": tokens.canvas,
+                "surface": tokens.surface_alt,
+                "surface_variant": tokens.surface,
+                "text_primary": tokens.text_primary,
+                "text_secondary": tokens.text_secondary,
+                "border": tokens.stroke,
+                "success": tokens.success,
+                "warning": tokens.warning,
+                "error": tokens.danger,
+                "info": tokens.accent,
+            }
+
+        return ThemeManager.get_theme_colors(
+            theme_name or self.get_current_theme_name()
+        )
+
     def get_current_theme_name(self) -> str:
         """Obtiene el nombre del tema actual"""
         try:
             # Intentar obtener el tema desde la configuración
-            from src.utils.app_config import AppConfig
             app_config = AppConfig()
             return app_config.get_theme()
         except:
@@ -2259,7 +2647,7 @@ class DiskViewer(QWidget):
     def get_themed_html_text(self, theme_name: str, content: str, bold: bool = False, color_type: str = "text_primary") -> str:
         """Genera HTML con colores del tema para texto simple"""
         try:
-            colors = ThemeManager.get_theme_colors(theme_name)
+            colors = self._get_analysis_colors(theme_name)
             color = colors.get(color_type, colors['text_primary'])
             weight = "bold" if bold else "normal"
             return f'<span style="color: {color}; font-weight: {weight};">{content}</span>'
@@ -2269,7 +2657,7 @@ class DiskViewer(QWidget):
     def get_usage_color_by_percentage(self, usage_percent: float) -> str:
         """Obtiene el color del tema según el porcentaje de uso del disco"""
         try:
-            colors = ThemeManager.get_theme_colors(self.get_current_theme_name())
+            colors = self._get_analysis_colors(self.get_current_theme_name())
             
             if usage_percent > 90:
                 return colors['error']
@@ -2361,7 +2749,13 @@ class DiskViewer(QWidget):
 
     def _render_health_html(self, current_theme, disk_info, health_data) -> str:
         """Genera el HTML del estado de salud y factores SMART con colores de tema."""
-        colors = ThemeManager.get_theme_colors(current_theme)
+        if (health_data.get("available") is False
+                or health_data.get("status") in {"Desconocido", "Error"}
+                or health_data.get("score") is None):
+            return ("<b>Salud: datos no disponibles</b><br>"
+                    "No se puede valorar la salud sin datos del dispositivo.<br>"
+                    "SMART son indicadores que informa el disco; no garantizan que no vaya a fallar.")
+        colors = self._get_analysis_colors(current_theme)
         score = health_data.get('score', 0)
         # Determinar color/ícono/etiqueta
         if score >= 90:
@@ -2377,18 +2771,19 @@ class DiskViewer(QWidget):
         text_color = colors['text_primary']
 
         # Bloque principal
+        status_background = self._rgba(status_color, 0.14)
         health_text = f"""
-        <div style="margin-bottom: 15px; padding: 12px; background-color: {status_color}20; border-radius: 8px; border-left: 5px solid {status_color};">
-            <div style="color: {status_color}; font-weight: bold; font-size: 14px; margin-bottom: 8px;">
+        <div style="margin-bottom: 10px; padding: 10px; background-color: {status_background}; border: 1px solid {colors['border']}; border-radius: 9px; border-left: 4px solid {status_color};">
+            <div style="color: {status_color}; font-weight: bold; margin-bottom: 6px;">
                 {status_icon} Estado: {status_text}
             </div>
-            <div style="color: {text_color}; margin-bottom: 5px;">
+            <div style="color: {text_color}; margin-bottom: 4px;">
                 📊 Puntuación de Salud: <span style="font-weight: bold; color: {status_color};">{score}/100</span>
             </div>
-            <div style="color: {text_color}; margin-bottom: 5px;">
+            <div style="color: {text_color}; margin-bottom: 4px;">
                 💾 Uso del Disco: <span style="font-weight: bold;">{disk_info.usage_percent:.1f}%</span>
             </div>
-            <div style="color: {text_color}; margin-bottom: 8px;">
+            <div style="color: {text_color};">
                 💡 Acción: <span style="font-weight: bold;">{health_data.get('status', 'Desconocido')}</span>
             </div>
         </div>
@@ -2400,13 +2795,13 @@ class DiskViewer(QWidget):
             surface_color = colors['surface']
             accent_color = colors['primary']
             health_text += f"""
-            <div style="margin-bottom: 15px; padding: 12px; background-color: {surface_color}; border-radius: 8px; border-left: 4px solid {accent_color};">
-                <div style="color: {accent_color}; font-weight: bold; margin-bottom: 8px;">🔍 FACTORES DE SALUD:</div>
+            <div style="margin-bottom: 10px; padding: 10px; background-color: {surface_color}; border: 1px solid {colors['border']}; border-radius: 9px; border-left: 4px solid {accent_color};">
+                <div style="color: {accent_color}; font-weight: bold; margin-bottom: 6px;">🔍 FACTORES DE SALUD</div>
             """
             for factor in factors:
-                bg_color = colors['background']
+                bg_color = self._rgba(accent_color, 0.08)
                 health_text += f"""
-                <div style="color: {text_color}; margin-bottom: 4px; padding: 3px; background-color: {bg_color}; border-radius: 3px;">
+                <div style="color: {text_color}; margin-bottom: 3px; padding: 4px 6px; background-color: {bg_color}; border-radius: 5px;">
                     • {factor}
                 </div>
                 """
@@ -2424,12 +2819,12 @@ class DiskViewer(QWidget):
             tbw_write = tbw.get('write_tb', 0)
             tbw_rated = tbw.get('rated_tbw', 0)
             health_text += f"""
-            <div style="margin-bottom: 15px; padding: 12px; background-color: {surface}; border-radius: 8px; border-left: 4px solid {accent};">
-                <div style="color: {accent}; font-weight: bold; margin-bottom: 8px;">📌 RESUMEN (SMART)</div>
+            <div style="margin-bottom: 10px; padding: 10px; background-color: {surface}; border: 1px solid {colors['border']}; border-radius: 9px; border-left: 4px solid {accent};">
+                <div style="color: {accent}; font-weight: bold; margin-bottom: 6px;">📌 RESUMEN (SMART)</div>
                 <div style="display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 6px;">
                     <div>🌡️ Temp: <b>{(str(temp) + '°C') if isinstance(temp, (int, float)) else ('N/A' if temp is None else temp)}</b></div>
                     <div>⏰ Horas: <b>{(f"{int(hours):,}h" if isinstance(hours, (int, float)) else 'N/A')}</b></div>
-                    <div>🔄 Ciclos: <b>{(f"{int(cycles):,}" if isinstance(cycles, (int, float)) else 'N/A')}</b></div>
+                    <div>Ciclos: <b>{(f"{int(cycles):,}" if isinstance(cycles, (int, float)) else 'N/A')}</b></div>
                     <div>🧮 TBW: <b>{tbw_read:.1f}T L / {tbw_write:.1f}T E</b>{(f" (de {int(tbw_rated)}T)" if tbw_rated else '')}</div>
                 </div>
             </div>
@@ -2452,4 +2847,4 @@ class DiskViewer(QWidget):
                 "✅ Disco de datos - Seguro para organización", "💾"
             )
 
-        return health_text
+        return health_text + "<p>SMART informa indicadores del dispositivo; esta valoración no garantiza que el disco no vaya a fallar.</p>"

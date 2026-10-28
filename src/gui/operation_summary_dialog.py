@@ -3,7 +3,9 @@
 Resumen post-organización.
 """
 
-from PyQt6.QtWidgets import QDialog, QLabel, QPushButton, QTextEdit, QVBoxLayout
+from PyQt6.QtWidgets import QDialog, QTextEdit, QVBoxLayout
+from qfluentwidgets import PrimaryPushButton, TitleLabel
+from src.gui.v2.theme import apply_dialog_surface
 
 
 class OperationSummaryDialog(QDialog):
@@ -12,13 +14,15 @@ class OperationSummaryDialog(QDialog):
     def __init__(self, summary: dict, parent=None):
         super().__init__(parent)
         self.summary = summary or {}
-        self.setWindowTitle("📊 Resumen de organización")
+        self.setWindowTitle("Resumen de organización")
+        self.setObjectName("operationSummaryDialog")
         self.resize(540, 420)
         self._build_ui()
+        apply_dialog_surface(self)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Resultado de la última ejecución:"))
+        layout.addWidget(TitleLabel("Resultado de la última ejecución"))
 
         content = QTextEdit()
         content.setReadOnly(True)
@@ -26,6 +30,7 @@ class OperationSummaryDialog(QDialog):
             "\n".join(
                 [
                     f"Carpetas movidas: {self.summary.get('folders_moved', 0)}",
+                    "Estado: deshecha" if self.summary.get("undone") else "Estado: resultado de la ejecución",
                     f"Archivos movidos: {self.summary.get('files_moved', 0)}",
                     f"Espacio reorganizado: {self._format_size(self.summary.get('bytes_reorganized', 0))}",
                     f"Duplicados omitidos: {self.summary.get('skipped_duplicates', 0)}",
@@ -42,7 +47,7 @@ class OperationSummaryDialog(QDialog):
         )
         layout.addWidget(content, 1)
 
-        close_btn = QPushButton("Cerrar")
+        close_btn = PrimaryPushButton("Cerrar")
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
 

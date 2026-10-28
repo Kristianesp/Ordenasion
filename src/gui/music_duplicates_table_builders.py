@@ -62,10 +62,19 @@ def library_row_colors(
     is_applied_variant: bool,
     has_selected_variant: bool,
 ) -> Tuple[str, str | None]:
+    """Colores de fila con tokens semánticos del sistema de diseño.
+
+    Devuelve el color con alfa suave (#AARRGGBB) para no saturar la tabla.
+    """
+    from src.gui.v2.theme import current_tokens
+
+    def _soft(hex_color: str, alpha: str = "26") -> str:
+        return f"#{alpha}{hex_color.lstrip('#').upper()}"
+
     if review_status == "complete" or is_applied_variant:
-        return "resolved", "#d6f7d8"
+        return "resolved", _soft(current_tokens().success)
     if review_status == "no_match":
-        return "rejected", "#f8e5e5"
+        return "rejected", _soft(current_tokens().danger)
     if has_selected_variant:
-        return "selected_variant", "#e6f1ff"
+        return "selected_variant", _soft(current_tokens().accent)
     return "pending", None

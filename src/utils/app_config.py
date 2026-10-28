@@ -6,6 +6,9 @@ Maneja las preferencias del usuario como tema y tamaño de fuente
 
 import json
 import os
+import re
+import tempfile
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -22,8 +25,11 @@ class AppConfig:
 
     DEFAULT_CONFIG = {
         "interface": {
-            "font_size": 14,
+            "font_size": 13,
             "theme": "🌞 Claro Elegante",  # Tema por defecto (nombre unificado con themes.py)
+            "theme_mode": "system",
+            "accent_color": "#0078D4",
+            "density": "comfortable",
             "ui_advanced_mode": False,
         },
         "categories": {"auto_save": True, "backup_enabled": True},
@@ -85,7 +91,7 @@ class AppConfig:
             else:
                 # ⚠️ CRÍTICO: NO intentar escribir archivo durante __init__ en .exe
                 # Solo devolver configuración por defecto - el archivo se creará cuando se guarde
-                return self.DEFAULT_CONFIG.copy()
+                return deepcopy(self.DEFAULT_CONFIG)
         except Exception as e:
             # ⚠️ CRÍTICO: En .exe, los archivos pueden no estar disponibles aún
             # No usar logger aquí porque puede no estar inicializado
@@ -95,11 +101,11 @@ class AppConfig:
                 error(f"Error cargando configuración: {e}")
             except Exception:
                 pass  # Logger no disponible - continuar con defaults
-            return self.DEFAULT_CONFIG.copy()
+            return deepcopy(self.DEFAULT_CONFIG)
 
     def merge_configs(self, default: Dict, loaded: Dict) -> Dict:
         """Fusiona configuración por defecto con la cargada"""
-        merged = default.copy()
+        merged = deepcopy(default)
 
         for key, value in loaded.items():
             if (
@@ -115,6 +121,7 @@ class AppConfig:
 
     def save_config(self, config: Optional[Dict] = None) -> bool:
         """Guarda la configuración en el archivo"""
+        temporary_path = None
         try:
             if config is None:
                 config = self.config
@@ -122,15 +129,27 @@ class AppConfig:
             # Crear directorio si no existe
             self.config_file.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(self.config_file, "w", encoding="utf-8") as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.config_file.parent,
+                prefix=f".{self.config_file.name}.", suffix=".tmp", delete=False,
+            ) as f:
+                temporary_path = Path(f.name)
                 json.dump(config, f, indent=2, ensure_ascii=False)
-
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, self.config_file)
             return True
         except Exception as e:
             from .logger import error
 
             error(f"Error guardando configuración: {e}")
             return False
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def get(self, key_path: str, default: Any = None) -> Any:
         """Obtiene un valor de configuración por ruta de claves"""
@@ -165,8 +184,10 @@ class AppConfig:
             config[keys[-1]] = value
 
             # Guardar configuración
+            if not self.save_config(latest_config):
+                return False
             self.config = latest_config
-            return self.save_config(latest_config)
+            return True
         except Exception as e:
             from .logger import error
 
@@ -175,7 +196,7 @@ class AppConfig:
 
     def get_font_size(self) -> int:
         """Obtiene el tamaño de fuente configurado"""
-        return self.get("interface.font_size", 12)
+        return self.get("interface.font_size", 13)
 
     def set_font_size(self, size: int) -> bool:
         """Establece el tamaño de fuente"""
@@ -188,6 +209,63 @@ class AppConfig:
     def set_theme(self, theme: str) -> bool:
         """Establece el tema"""
         return self.set("interface.theme", theme)
+
+    def get_theme_mode(self) -> str:
+        """Obtiene el modo visual Fluent: light, dark o system."""
+        mode = str(self.get("interface.theme_mode", "")).lower()
+        if mode in {"light", "dark", "system"}:
+            return mode
+
+        legacy_theme = self.get_theme().lower()
+        return "dark" if "oscuro" in legacy_theme else "light"
+
+    def set_theme_mode(self, mode: str) -> bool:
+        """Guarda el modo visual Fluent normalizado."""
+        normalized = str(mode).lower()
+        if normalized not in {"light", "dark", "system"}:
+            normalized = "system"
+        return self.set("interface.theme_mode", normalized)
+
+    def get_accent_color(self) -> str:
+        """Obtiene el color de acento de la interfaz."""
+        return str(self.get("interface.accent_color", "#0078D4"))
+
+    def set_accent_color(self, color: str) -> bool:
+        """Guarda el color de acento de la interfaz."""
+        color = str(color).strip()
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            return False
+        return self.set("interface.accent_color", color.upper())
+
+    def save_appearance(self, mode: str, density: str, font_size: int, accent: str) -> bool:
+        """Valida y persiste toda la apariencia en una sola escritura."""
+        accent = str(accent).strip()
+        if (mode not in {"system", "light", "dark"}
+                or density not in {"comfortable", "compact"}
+                or font_size not in {11, 13, 15}
+                or not re.fullmatch(r"#[0-9a-fA-F]{6}", accent)):
+            return False
+        updated = self.load_config()
+        updated["interface"].update(
+            theme_mode=mode, density=density, font_size=font_size,
+            accent_color=accent.upper(),
+        )
+        if not self.save_config(updated):
+            return False
+        self.config = updated
+        return True
+
+    def get_interface_density(self) -> str:
+        """Obtiene la densidad visual."""
+        density = str(self.get("interface.density", "comfortable")).lower()
+        return density if density in {"comfortable", "compact"} else "comfortable"
+
+    def set_interface_density(self, density: str) -> bool:
+        """Guarda la densidad visual."""
+        normalized = str(density).lower()
+        if normalized not in {"comfortable", "compact"}:
+            normalized = "comfortable"
+        return self.set("interface.density", normalized)
 
     def get_ui_advanced_mode(self) -> bool:
         """Indica si la UI debe abrirse en modo avanzado."""

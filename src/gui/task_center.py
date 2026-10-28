@@ -63,11 +63,12 @@ class BackgroundTaskRegistry(QObject):
         task = self._tasks.get(task_id)
         if not task:
             return
+        if task["status"] != "En progreso" or not callable(task.get("cancel_callback")):
+            return
         callback = task.get("cancel_callback")
         if callback:
             callback()
-        task["status"] = "Cancelada"
-        task["ended_at"] = datetime.now()
+        task["status"] = "Cancelación solicitada"
         self.tasks_updated.emit()
 
     def get_tasks(self) -> list[tuple[str, dict]]:

@@ -272,7 +272,7 @@ def on_audio_playback_state_changed(view: Any, state: Any) -> None:
     stopped_state = getattr(playback_state, "StoppedState", None)
     if view._audio_context == "library":
         is_playing = state == playing_state
-        view.library_play_btn.setText("⏸" if is_playing else "▶")
+        view.library_play_btn.setText("Pausar" if is_playing else "Reproducir")
         current_file = view.audio_player.source().toLocalFile()
         if current_file:
             name = Path(current_file).name
@@ -293,7 +293,7 @@ def on_audio_playback_state_changed(view: Any, state: Any) -> None:
                 "Selecciona una pista para escucharla aqui."
             )
     elif view._audio_context != "library":
-        view.library_play_btn.setText("▶")
+        view.library_play_btn.setText("Reproducir")
 
 
 def load_audio_source(view: Any, file_path: Path, context: str) -> None:
@@ -308,7 +308,7 @@ def load_audio_source(view: Any, file_path: Path, context: str) -> None:
             enable_seek=expected_duration > 0,
         )
     else:
-        view.library_play_btn.setText("▶")
+        view.library_play_btn.setText("Reproducir")
         view.library_seek_slider.setEnabled(False)
         view.library_seek_slider.setRange(0, 0)
         view.library_seek_slider.setValue(0)

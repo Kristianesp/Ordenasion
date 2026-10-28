@@ -76,9 +76,9 @@ UI_CONFIG = {
     "WINDOW_MIN_HEIGHT": 600,       # Alto mínimo para responsive
 
     # Alturas optimizadas para usabilidad de escritorio
-    "TABLE_ROW_HEIGHT": 32,          # Altura de fila compacta pero legible
-    "BUTTON_HEIGHT": 32,             # Altura de botón balanceada
-    "INPUT_HEIGHT": 32,              # Altura de input cómoda
+    "TABLE_ROW_HEIGHT": 37,
+    "BUTTON_HEIGHT": 33,
+    "INPUT_HEIGHT": 33,
     "TAB_HEIGHT": 36,                # Altura de pestañas
 
     # Espaciado y padding
@@ -97,11 +97,11 @@ UI_CONFIG = {
 
     # Tipografía
     "FONT_SIZE_SMALL": 11,           # Texto pequeño
-    "FONT_SIZE_NORMAL": 12,          # Texto normal
-    "FONT_SIZE_MEDIUM": 14,          # Texto medio
+    "FONT_SIZE_NORMAL": 13,          # Texto normal
+    "FONT_SIZE_MEDIUM": 15,          # Texto medio
     "FONT_SIZE_LARGE": 16,           # Texto grande
     "FONT_SIZE_TITLE": 20,           # Títulos
-    "FONT_FAMILY": "'Segoe UI', -apple-system, BlinkMacSystemFont, 'Roboto', sans-serif",
+    "FONT_FAMILY": "'Nunito', 'Segoe UI Variable', 'Segoe UI', sans-serif",
 
     # Animaciones y transiciones
     "ANIMATION_DURATION": 200,       # Duración de animaciones en ms

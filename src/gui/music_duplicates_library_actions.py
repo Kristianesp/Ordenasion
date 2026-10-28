@@ -28,6 +28,7 @@ from src.gui.music_duplicates_lookup_dialogs import (
     show_lookup_diagnostics_dialog,
 )
 from src.utils.app_config import AppConfig
+from src.gui.v2.theme import apply_dialog_surface, apply_menu_surface
 
 
 def show_selected_candidate_preview(view: Any) -> None:
@@ -63,6 +64,7 @@ def show_library_context_menu(view: Any, position) -> None:
     view.library_table.selectRow(row)
     target = Path(file_path)
     menu = QMenu(view)
+    apply_menu_surface(menu)
 
     review_status = audio_metadata_service.get_track_review_status(target)
     complete_label = (
@@ -87,17 +89,17 @@ def show_library_context_menu(view: Any, position) -> None:
     )
     menu.addAction(no_match_action)
 
-    clean_action = QAction("🧼 Limpiar titulos", view)
+    clean_action = QAction("Limpiar títulos", view)
     clean_action.triggered.connect(view.clean_selected_titles)
     menu.addAction(clean_action)
 
-    edit_action = QAction("✏️ Editar metadatos", view)
+    edit_action = QAction("Editar metadatos", view)
     edit_action.triggered.connect(view.edit_selected_metadata)
     menu.addAction(edit_action)
 
     lookup_result = view._get_lookup_result(target)
     if lookup_result:
-        diagnostics_action = QAction("🧪 Ver diagnostico lookup", view)
+        diagnostics_action = QAction("Ver diagnóstico de búsqueda", view)
         diagnostics_action.triggered.connect(
             lambda checked=False, path=target: show_lookup_diagnostics_dialog(
                 view, path
@@ -105,7 +107,7 @@ def show_library_context_menu(view: Any, position) -> None:
         )
         menu.addAction(diagnostics_action)
         if len(lookup_result.get("cover_choices") or []) > 1:
-            cover_action = QAction("🖼 Elegir portada", view)
+            cover_action = QAction("Elegir portada", view)
             cover_action.triggered.connect(
                 lambda checked=False, path=target: prompt_cover_choice(view, path)
             )
@@ -116,6 +118,7 @@ def show_library_context_menu(view: Any, position) -> None:
 
 def edit_library_columns(view: Any) -> None:
     dialog = QDialog(view)
+    dialog.setObjectName("musicLibraryColumnsDialog")
     dialog.setWindowTitle("Columnas de biblioteca")
     dialog.resize(320, 460)
     layout = QVBoxLayout(dialog)
@@ -138,6 +141,7 @@ def edit_library_columns(view: Any) -> None:
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)
+    apply_dialog_surface(dialog)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return
     for index, checkbox in checkbox_map.items():

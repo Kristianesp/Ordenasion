@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
 )
+from src.gui.v2.theme import apply_dialog_surface
 
 
 VARIANT_TABLE_HEADERS = [
@@ -116,6 +117,7 @@ def prompt_variant_choice(
         return 0
 
     dialog = QDialog(view)
+    dialog.setObjectName("musicVariantChoiceDialog")
     dialog.setWindowTitle(
         f"Elegir variante [{position}/{total}] - {Path(file_path).name}"
     )
@@ -176,6 +178,7 @@ def prompt_variant_choice(
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)
 
+    apply_dialog_surface(dialog)
     dialog_result = dialog.exec()
     if dialog_result == 2:
         return -1

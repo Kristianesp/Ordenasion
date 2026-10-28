@@ -829,12 +829,19 @@ class DiskManager:
             
             # Obtener SMART reales
             smart = self.get_disk_io_stats(path) or {}
+            if not smart or not any(
+                smart.get(key) is not None
+                for key in ("temperature", "power_on_hours", "power_cycles", "smart_status")
+            ):
+                return {"status": "Datos SMART no disponibles", "score": None,
+                        "factors": [], "available": False}
             
             # Usar el servicio de salud
             health_result = self.health_service.calculate_health(smart, disk_info)
             
             return {
                 "status": health_result.status,
+                "available": True,
                 "score": health_result.score,
                 "factors": health_result.factors,
                 "temp_score": health_result.temp_score,

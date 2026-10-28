@@ -6,6 +6,7 @@ Optimizado para manejar grandes cantidades de datos sin congelar la UI
 
 from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex, QVariant
 from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtWidgets import QApplication
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
@@ -20,7 +21,7 @@ class VirtualizedMovementsModel(QAbstractTableModel):
     def __init__(self, data: List[Dict[str, Any]] = None, parent=None):
         super().__init__(parent)
         self._data = data if data else []
-        self._headers = ["☑️", "📂 Elemento", "📁 Destino", "📊 %", "📄 Archivos", "💾 Tamaño"]
+        self._headers = ["", "Elemento", "Destino", "%", "Archivos", "Tamaño"]
         self._checked_ids = set()  # Mantener estado de checkboxes con IDs estables
         # Mapeo de extensiones a iconos
         self._icon_cache: Dict[str, QIcon] = {}
@@ -96,7 +97,8 @@ class VirtualizedMovementsModel(QAbstractTableModel):
         # Rol de font (negrita para grupos)
         elif role == Qt.ItemDataRole.FontRole:
             if col == 1 and item_data.get('is_group', False):
-                font = QFont("Segoe UI", 9, QFont.Weight.Bold)
+                font = QFont(QApplication.font())
+                font.setBold(True)
                 return font
         
         # Rol de tooltip
@@ -361,7 +363,7 @@ class VirtualizedDuplicatesModel(QAbstractTableModel):
     def __init__(self, data: List[Dict[str, Any]] = None, parent=None):
         super().__init__(parent)
         self._data = data if data else []
-        self._headers = ["☑️", "📄 Nombre", "📂 Ubicación", "💾 Tamaño", "📅 Fecha", "🔐 Hash/ID", "⚙️ Acciones"]
+        self._headers = ["", "Nombre", "Ubicación", "Tamaño", "Fecha", "Hash/ID", "Acciones"]
         self._checked_rows = set()
     
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -395,7 +397,7 @@ class VirtualizedDuplicatesModel(QAbstractTableModel):
             elif col == 1:  # Nombre
                 name = item_data.get('name', '')
                 is_original = item_data.get('is_original', False)
-                return f"🟢 {name}" if is_original else f"🔴 {name}"
+                return f"Conservar · {name}" if is_original else f"Copia · {name}"
             elif col == 2:  # Ubicación
                 return str(item_data.get('location', ''))
             elif col == 3:  # Tamaño
@@ -409,7 +411,8 @@ class VirtualizedDuplicatesModel(QAbstractTableModel):
             elif col == 5:  # Hash/ID
                 hash_value = item_data.get('hash', 'N/A')
                 hash_display = hash_value[:16] + "..." if hash_value and len(hash_value) > 16 else hash_value
-                return f"🔐 {hash_display}"
+                status = item_data.get("match_status", "Candidato")
+                return f"{status} · {hash_display}"
             elif col == 6:  # Acciones
                 return "🗑️"
         
@@ -420,7 +423,8 @@ class VirtualizedDuplicatesModel(QAbstractTableModel):
         # Font role
         elif role == Qt.ItemDataRole.FontRole:
             if col == 1 and item_data.get('is_original', False):
-                font = QFont("Segoe UI", 9, QFont.Weight.Bold)
+                font = QFont(QApplication.font())
+                font.setBold(True)
                 return font
         
         # Tooltip role
@@ -433,7 +437,7 @@ class VirtualizedDuplicatesModel(QAbstractTableModel):
                 return f"Tamaño exacto: {size_bytes:,} bytes"
             elif col == 5:
                 hash_value = item_data.get('hash', 'N/A')
-                return f"Hash completo: {hash_value}"
+                return f"{item_data.get('match_status', 'Candidato')}\nHash/ID: {hash_value}"
         
         return None
     
@@ -614,13 +618,13 @@ class PaginatedDuplicatesModel(VirtualizedDuplicatesModel):
         
         # Función de ordenamiento
         def sort_key(item):
-            if column_name == "💾 Tamaño":
+            if column_name == "Tamaño":
                 return item.get('size', 0)
-            elif column_name == "📅 Fecha":
+            elif column_name == "Fecha":
                 return item.get('date', 0)  # Usar 'date' en lugar de 'modified_time'
-            elif column_name == "📄 Nombre":
+            elif column_name == "Nombre":
                 return item.get('name', '').lower()  # Usar 'name' en lugar de 'filename'
-            elif column_name == "📂 Ubicación":
+            elif column_name == "Ubicación":
                 return item.get('location', '').lower()  # Usar 'location' en lugar de 'path'
             else:
                 return str(item.get('name', ''))

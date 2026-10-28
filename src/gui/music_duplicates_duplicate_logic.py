@@ -16,6 +16,7 @@ from src.gui.music_duplicates_presenters import (
     build_duplicate_preview_block,
 )
 from src.gui.music_duplicates_table_builders import build_duplicate_row_values
+from src.gui.v2.theme import current_tokens, apply_menu_surface
 
 
 def refresh_results(view: Any) -> None:
@@ -55,11 +56,12 @@ def show_group_detail(view: Any, current: Any, previous: Any) -> None:
     identity_key = current.data(Qt.ItemDataRole.UserRole)
     group = view.results.get(identity_key, [])
     view.duplicate_group_info.setText(
-        f"Grupo: {identity_key} | Copias: {len(group)} | Selecciona pistas para reproducir, comparar o enviar a papelera."
+        f"Candidatos musicales: {len(group)} copias. La similitud musical no confirma archivos idénticos; compara antes de retirar."
     )
     view.duplicates_table.setRowCount(0)
     view.duplicates_table.setSortingEnabled(False)
     removable_bytes = sum(int(item.get("file_size") or 0) for item in group[1:])
+    tokens = current_tokens()
     for item_index, item in enumerate(group):
         row = view.duplicates_table.rowCount()
         view.duplicates_table.insertRow(row)
@@ -76,9 +78,11 @@ def show_group_detail(view: Any, current: Any, previous: Any) -> None:
                     Qt.ItemDataRole.UserRole, str(Path(item.get("file_path", "")))
                 )
             if is_best:
-                cell.setBackground(QBrush(QColor(223, 247, 232)))
+                cell.setBackground(QBrush(QColor(tokens.surface_alt)))
+                cell.setForeground(QBrush(QColor(tokens.text_primary)))
             elif col == 0:
-                cell.setBackground(QBrush(QColor(255, 245, 227)))
+                cell.setBackground(QBrush(QColor(tokens.surface)))
+                cell.setForeground(QBrush(QColor(tokens.text_primary)))
             view.duplicates_table.setItem(row, col, cell)
     view.duplicates_table.setSortingEnabled(True)
     if group:
@@ -104,6 +108,7 @@ def selected_duplicate_paths(view: Any) -> List[str]:
 
 def update_duplicate_preview(view: Any) -> None:
     selected_paths = selected_duplicate_paths(view)
+    view.delete_duplicate_btn.setEnabled(bool(selected_paths))
     if not selected_paths:
         view.detail.clear()
         return
@@ -182,19 +187,20 @@ def show_duplicates_context_menu(view: Any, position) -> None:
         return
     view.duplicates_table.selectRow(index.row())
     menu = QMenu(view)
-    select_best_action = QAction("⭐ Ir a mejor copia", view)
+    apply_menu_surface(menu)
+    select_best_action = QAction("Ir a mejor copia", view)
     select_best_action.triggered.connect(view._select_best_duplicate)
     menu.addAction(select_best_action)
-    keep_action = QAction("✅ Marcar como conservar", view)
+    keep_action = QAction("Marcar como conservar", view)
     keep_action.triggered.connect(view._mark_selected_duplicate_as_keep)
     menu.addAction(keep_action)
-    play_action = QAction("▶ Reproducir", view)
+    play_action = QAction("Reproducir", view)
     play_action.triggered.connect(view.play_selected_duplicate)
     menu.addAction(play_action)
-    open_action = QAction("📂 Abrir carpeta", view)
+    open_action = QAction("Abrir carpeta", view)
     open_action.triggered.connect(view.open_selected_duplicate_folder)
     menu.addAction(open_action)
-    delete_action = QAction("🗑️ Enviar a papelera", view)
+    delete_action = QAction("Enviar a papelera", view)
     delete_action.triggered.connect(view.delete_selected_duplicates)
     menu.addAction(delete_action)
     viewport = view.duplicates_table.viewport() or view.duplicates_table

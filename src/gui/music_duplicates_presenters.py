@@ -6,12 +6,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+from PyQt6.QtGui import QColor
+
 from src.gui.music_duplicates_formatters import (
     format_bitrate,
     format_duration,
     format_file_size,
     format_quality,
 )
+from src.gui.v2.theme import current_tokens
 
 
 def lookup_cache_badge(lookup: Dict[str, Any]) -> Tuple[str, str]:
@@ -20,14 +23,31 @@ def lookup_cache_badge(lookup: Dict[str, Any]) -> Tuple[str, str]:
     if status == "fresh":
         return (
             "cache fresca",
-            "background: #dff6ea; color: #145a32; padding: 4px 8px; border-radius: 10px;",
+            _badge_style(current_tokens().success),
         )
     if lookup and (status == "cached" or cache_updated_at):
         return (
             "cache reutilizada",
-            "background: #e8eefc; color: #244d8a; padding: 4px 8px; border-radius: 10px;",
+            _badge_style(current_tokens().accent),
         )
     return "", ""
+
+
+def _badge_style(color: str) -> str:
+    return (
+        f"background: {_rgba_css(color, 0.14)}; "
+        f"color: {color}; padding: 4px 8px; border-radius: 4px;"
+    )
+
+
+def _rgba_css(color: str, alpha: float) -> str:
+    parsed = QColor(color)
+    if not parsed.isValid():
+        return color
+    return (
+        f"rgba({parsed.red()}, {parsed.green()}, {parsed.blue()}, "
+        f"{max(0.0, min(1.0, alpha)):.2f})"
+    )
 
 
 def summarize_lookup_candidates(result: Dict[str, Any], limit: int = 3) -> str:

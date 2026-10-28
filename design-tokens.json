@@ -1,0 +1,165 @@
+{
+  "$schema": "https://design-tokens.github.io/community-group/format/",
+  "name": "Ordenasion Design System",
+  "version": "1.1.0",
+  "color": {
+    "light": {
+      "canvas": "#F3F6FB",
+      "surface": "#FFFFFF",
+      "surface_alt": "#E9EFF7",
+      "stroke": "#D5DFEA",
+      "text_primary": "#1A2430",
+      "text_secondary": "#40546B",
+      "accent": "#0F6CBD",
+      "accent_hover": "#115EA3",
+      "success": "#0E700E",
+      "warning": "#8A5300",
+      "danger": "#C42B1C"
+    },
+    "dark": {
+      "canvas": "#101827",
+      "surface": "#182337",
+      "surface_alt": "#22324A",
+      "stroke": "#3A4D66",
+      "text_primary": "#F5F9FF",
+      "text_secondary": "#B9C8D9",
+      "accent": "#60CDFF",
+      "success": "#6CCB5F",
+      "warning": "#FFD666",
+      "danger": "#FF99A4"
+    },
+    "semantic_alpha": {
+      "soft_background": 0.12,
+      "hover_overlay": 0.08
+    }
+  },
+  "typography": {
+    "family_preference": [
+      "Nunito",
+      "Nunito Sans",
+      "Segoe UI Variable",
+      "Segoe UI",
+      "Aptos",
+      "Arial",
+      "Noto Sans"
+    ],
+    "scale": {
+      "display": {
+        "offset": 8,
+        "weight": 700
+      },
+      "title": {
+        "offset": 2,
+        "minimum": 14,
+        "weight": 600
+      },
+      "body": {
+        "offset": 0,
+        "weight": 400
+      },
+      "small": {
+        "offset": -2,
+        "minimum": 11,
+        "weight": 600
+      },
+      "caption": {
+        "offset": -3,
+        "minimum": 10,
+        "weight": 400
+      }
+    },
+    "control": {
+      "height_comfortable": {
+        "body_offset": 20
+      },
+      "height_compact": {
+        "body_offset": 16
+      },
+      "padding_x_comfortable": 12,
+      "padding_x_compact": 8
+    }
+  },
+  "spacing": {
+    "scale": [
+      4,
+      8,
+      12,
+      16,
+      20,
+      24,
+      32
+    ],
+    "page_margin": [
+      24,
+      32
+    ],
+    "card_padding": [
+      16,
+      20
+    ],
+    "card_gap": [
+      12,
+      16
+    ],
+    "control_gap": [
+      8,
+      12
+    ],
+    "chip_padding": [
+      4,
+      8
+    ]
+  },
+  "radius": {
+    "scale": [
+      4,
+      6,
+      8,
+      12,
+      16
+    ],
+    "progress_chip": 4,
+    "input_button": 8,
+    "card_surface": 16
+  },
+  "components": {
+    "focus_border_width": 2,
+    "scrollbar": {
+      "width": 8,
+      "thumb": "stroke",
+      "thumb_hover": "text_secondary",
+      "track": "transparent"
+    },
+    "glass_reflection": {
+      "width": 1,
+      "color": "glass.reflection"
+    }
+  },
+  "direction": "Ocean Frost",
+  "glass": {
+    "implementation": "Qt static softened mesh + neutral white translucent panels; no native backdrop blur",
+    "light": {
+      "fill": "rgba(255, 255, 255, 184)",
+      "border": "rgba(255, 255, 255, 224)",
+      "reflection": "rgba(255, 255, 255, 242)",
+      "mesh": [
+        "#A9CBED",
+        "#B3E4E9",
+        "#DAE7F7"
+      ]
+    },
+    "dark": {
+      "fill": "rgba(255, 255, 255, 16)",
+      "border": "rgba(255, 255, 255, 34)",
+      "reflection": "rgba(255, 255, 255, 62)",
+      "mesh": [
+        "#193653",
+        "#163A46",
+        "#202C46"
+      ]
+    },
+    "radius": 16,
+    "max_layers": 3,
+    "motion": "static"
+  }
+}

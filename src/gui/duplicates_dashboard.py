@@ -54,6 +54,7 @@ from src.core.transaction_manager import TransactionManager
 from src.gui.modern_components import TabHeaderWidget
 from src.gui.table_models import VirtualizedDuplicatesModel, PaginatedDuplicatesModel
 from src.gui.task_center import TaskCenterDialog, task_registry
+from src.gui.v2.theme import ElidedPathLabel, apply_control_sizes, typography_scale, apply_menu_surface
 
 
 class CheckboxDelegate(QStyledItemDelegate):
@@ -98,14 +99,17 @@ class CheckboxDelegate(QStyledItemDelegate):
             current_theme = app_config.get_theme()
             return ThemeManager.get_theme_colors(current_theme)
         except:
-            # Fallback a colores por defecto
+            # Fallback con tokens del sistema de diseño
+            from src.gui.v2.theme import current_tokens
+
+            tokens = current_tokens()
             return {
-                "primary": "#2563eb",
-                "border": "#e2e8f0",
-                "success": "#10b981",
-                "text_primary": "#1e293b",
-                "background": "#fefefe",
-                "surface": "#f8fafc",
+                "primary": tokens.accent,
+                "border": tokens.stroke,
+                "success": tokens.success,
+                "text_primary": tokens.text_primary,
+                "background": tokens.canvas,
+                "surface": tokens.surface_alt,
             }
 
     def paint_custom_checkbox(self, painter, rect, checked, colors):
@@ -229,6 +233,7 @@ class DuplicatesDashboard(QWidget):
         self._last_preview_sizes = [900, 260]
 
         self.init_ui()
+        apply_control_sizes(self, self.app_config)
         self.setup_connections()
         self.setup_context_menu()
 
@@ -248,33 +253,35 @@ class DuplicatesDashboard(QWidget):
 
         controls_frame = QFrame()
         controls_frame.setObjectName("duplicates_controls_frame")
-        controls_layout = QHBoxLayout(controls_frame)
+        controls_layout = QGridLayout(controls_frame)
         controls_layout.setContentsMargins(10, 8, 10, 8)
-        controls_layout.setSpacing(6)
+        controls_layout.setHorizontalSpacing(10)
+        controls_layout.setVerticalSpacing(8)
 
-        controls_layout.addWidget(QLabel("Metodo"))
+        controls_layout.addWidget(QLabel("Método"), 0, 0)
         self.method_combo = QComboBox()
         self.method_combo.addItems(["Rapido", "Hibrido", "Profundo"])
         self.method_combo.setCurrentIndex(0)
-        self.method_combo.setFixedHeight(30)
         self.method_combo.setMinimumWidth(156)
         self.method_combo.setToolTip(
             "Selecciona el método de detección de duplicados:\n• ULTRA-RÁPIDO: Compara tamaño + nombre + extensión\n• HÍBRIDO: Filtro rápido + confirmación MD5\n• PROFUNDO: MD5 completo de todo el archivo"
         )
-        controls_layout.addWidget(self.method_combo)
+        controls_layout.addWidget(self.method_combo, 0, 1)
 
-        self.select_folder_btn = QPushButton("📁 Carpeta")
-        self.select_folder_btn.setFixedHeight(30)
+        self.select_folder_btn = QPushButton("Carpeta")
         self.select_folder_btn.setMinimumWidth(112)
         self.select_folder_btn.setToolTip(
             "Selecciona la carpeta donde buscar archivos duplicados"
         )
         self.select_folder_btn.setProperty("styleClass", "ghost")
-        controls_layout.addWidget(self.select_folder_btn)
+        controls_layout.addWidget(self.select_folder_btn, 0, 2)
 
-        self.current_folder_label = QLabel("Ninguna ruta seleccionada")
+        self.current_folder_label = ElidedPathLabel("Ninguna ruta seleccionada")
         self.current_folder_label.setObjectName("duplicates_path_label")
         self.current_folder_label.setWordWrap(False)
+        self.current_folder_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         self.current_folder_label.setMinimumWidth(220)
         self.current_folder_label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
@@ -282,22 +289,20 @@ class DuplicatesDashboard(QWidget):
         self.current_folder_label.setToolTip(
             "Muestra la ruta de la carpeta seleccionada para buscar duplicados"
         )
-        controls_layout.addWidget(self.current_folder_label, 1)
+        controls_layout.addWidget(self.current_folder_label, 0, 3, 1, 5)
 
-        controls_layout.addSpacing(4)
-        controls_layout.addWidget(QLabel("Min"))
+        controls_layout.addWidget(QLabel("Mínimo"), 1, 0)
         self.min_size_spin = QSpinBox()
         self.min_size_spin.setRange(0, 10000)
         self.min_size_spin.setValue(1)
         self.min_size_spin.setSuffix(" MB")
-        self.min_size_spin.setFixedHeight(28)
         self.min_size_spin.setMinimumWidth(90)
         self.min_size_spin.setToolTip(
             "Tamaño mínimo de archivos a analizar (en MB)\nArchivos más pequeños serán ignorados"
         )
-        controls_layout.addWidget(self.min_size_spin)
+        controls_layout.addWidget(self.min_size_spin, 1, 1)
 
-        controls_layout.addWidget(QLabel("Ext"))
+        controls_layout.addWidget(QLabel("Extensión"), 1, 2)
         self.ext_filter_combo = QComboBox()
         self.ext_filter_combo.addItem("Todas", None)
         extensions = [
@@ -313,19 +318,18 @@ class DuplicatesDashboard(QWidget):
         ]
         for ext in extensions:
             self.ext_filter_combo.addItem(ext, ext)
-        self.ext_filter_combo.setFixedHeight(28)
         self.ext_filter_combo.setMinimumWidth(108)
         self.ext_filter_combo.setToolTip(
             "Filtra por tipo de archivo específico\nSelecciona 'Todas' para analizar todos los tipos"
         )
-        controls_layout.addWidget(self.ext_filter_combo)
+        controls_layout.addWidget(self.ext_filter_combo, 1, 3)
 
         self.recursive_cb = QCheckBox("Subcarpetas")
         self.recursive_cb.setChecked(True)
         self.recursive_cb.setToolTip(
             "Buscar archivos duplicados en todas las subcarpetas\nDesactivar para buscar solo en la carpeta principal"
         )
-        controls_layout.addWidget(self.recursive_cb)
+        controls_layout.addWidget(self.recursive_cb, 1, 4)
 
         self.show_details_cb = QCheckBox("Detalles")
         self.show_details_cb.setToolTip(
@@ -335,19 +339,21 @@ class DuplicatesDashboard(QWidget):
         self.group_by_hash_cb.setToolTip(
             "Agrupar archivos duplicados por su hash MD5\nFacilita la identificación de grupos de duplicados"
         )
-        controls_layout.addWidget(self.show_details_cb)
-        controls_layout.addWidget(self.group_by_hash_cb)
+        controls_layout.addWidget(self.show_details_cb, 1, 5)
+        controls_layout.addWidget(self.group_by_hash_cb, 1, 6)
 
         self.method_info = QLabel("Ultra: tamano + nombre + extension")
         self.method_info.setObjectName("duplicates_method_info")
         self.method_info.setToolTip(
             "Descripción del método de búsqueda seleccionado\nCambia automáticamente según la opción elegida"
         )
-        controls_layout.addWidget(self.method_info)
-
-        controls_layout.addStretch()
+        controls_layout.addWidget(self.method_info, 1, 7)
+        controls_layout.setColumnStretch(3, 1)
 
         main_layout.addWidget(controls_frame)
+        self.result_status_label = QLabel("Sin análisis. El método rápido encuentra candidatos; revisa las copias antes de retirarlas.")
+        self.result_status_label.setWordWrap(True)
+        main_layout.addWidget(self.result_status_label)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -361,14 +367,14 @@ class DuplicatesDashboard(QWidget):
         actions_layout.setContentsMargins(10, 8, 10, 8)
         actions_layout.setSpacing(6)
 
-        self.select_all_btn = QPushButton("☑️ Seleccionar")
+        self.select_all_btn = QPushButton("Seleccionar todo")
         self.select_all_btn.setProperty("styleClass", "ghost")
         self.select_all_btn.setToolTip(
             "Selecciona solo los archivos duplicados (rojos)"
         )
         actions_layout.addWidget(self.select_all_btn)
 
-        self.deselect_all_btn = QPushButton("☐ Deseleccionar")
+        self.deselect_all_btn = QPushButton("Limpiar selección")
         self.deselect_all_btn.setProperty("styleClass", "ghost")
         self.deselect_all_btn.setToolTip("Deselecciona todos los archivos de la tabla")
         actions_layout.addWidget(self.deselect_all_btn)
@@ -395,14 +401,16 @@ class DuplicatesDashboard(QWidget):
 
         actions_layout.addStretch()
 
-        self.delete_btn = QPushButton("🗑️ Eliminar")
+        self.delete_btn = QPushButton("Retirar selección")
+        self.delete_btn.setEnabled(False)
         self.delete_btn.setProperty("styleClass", "danger")
         self.delete_btn.setToolTip(
-            "Elimina permanentemente los archivos seleccionados\n¡CUIDADO! Esta acción no se puede deshacer"
+            "Retira a la papelera; si no hay soporte, usa .quarantine junto a cada archivo. Conserva los archivos sin marcar."
         )
         actions_layout.addWidget(self.delete_btn)
 
-        self.move_btn = QPushButton("📁 Mover")
+        self.move_btn = QPushButton("Mover")
+        self.move_btn.setEnabled(False)
         self.move_btn.setProperty("styleClass", "ghost")
         self.move_btn.setToolTip("Mueve los archivos seleccionados a otra carpeta")
         actions_layout.addWidget(self.move_btn)
@@ -417,10 +425,11 @@ class DuplicatesDashboard(QWidget):
 
         self.more_actions_btn = QToolButton()
         self.more_actions_btn.setObjectName("duplicates_more_button")
-        self.more_actions_btn.setText("⋯ Más")
+        self.more_actions_btn.setText("Más acciones")
         self.more_actions_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.more_actions_btn.setToolTip("Acciones secundarias")
         more_menu = QMenu(self)
+        apply_menu_surface(more_menu)
         self.export_action = more_menu.addAction("💾 Exportar")
         self.ignore_group_action = more_menu.addAction("🙈 Ignorar grupo")
         self.keep_selected_action = more_menu.addAction("🟢 Conservar")
@@ -490,10 +499,10 @@ class DuplicatesDashboard(QWidget):
         self.preview_panel.setVisible(self.preview_visible)
         results_layout.addWidget(self.table_splitter, 1)
 
-        self.scan_btn = QPushButton("Buscar ultra\nUltra: tamano + nombre + extension")
+        self.scan_btn = QPushButton("Analizar")
         self.scan_btn.setObjectName("scan_button")
         self.scan_btn.setEnabled(False)
-        self.scan_btn.setMinimumHeight(44)
+        self.scan_btn.setMinimumWidth(132)
         self.scan_btn.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
@@ -507,9 +516,9 @@ class DuplicatesDashboard(QWidget):
         pagination_layout = QHBoxLayout()
         pagination_layout.setSpacing(6)
 
-        self.prev_page_btn = QPushButton("◀")
+        self.prev_page_btn = QPushButton("Anterior")
         self.prev_page_btn.setProperty("styleClass", "ghost")
-        self.prev_page_btn.setFixedSize(30, 28)
+        self.prev_page_btn.setMinimumWidth(typography_scale(self.app_config).control_height)
         self.prev_page_btn.clicked.connect(self.go_to_previous_page)
         self.prev_page_btn.setEnabled(False)
         self.prev_page_btn.setToolTip("Ir a la página anterior de resultados")
@@ -522,9 +531,9 @@ class DuplicatesDashboard(QWidget):
         )
         pagination_layout.addWidget(self.page_info_label)
 
-        self.next_page_btn = QPushButton("▶")
+        self.next_page_btn = QPushButton("Siguiente")
         self.next_page_btn.setProperty("styleClass", "ghost")
-        self.next_page_btn.setFixedSize(30, 28)
+        self.next_page_btn.setMinimumWidth(typography_scale(self.app_config).control_height)
         self.next_page_btn.clicked.connect(self.go_to_next_page)
         self.next_page_btn.setEnabled(False)
         self.next_page_btn.setToolTip("Ir a la página siguiente de resultados")
@@ -541,8 +550,9 @@ class DuplicatesDashboard(QWidget):
             "📝 Historial de operaciones, errores y mensajes informativos del sistema"
         )
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(24)
-        self.log_text.setMinimumHeight(24)
+        log_height = typography_scale(self.app_config).control_height
+        self.log_text.setMinimumHeight(log_height)
+        self.log_text.setMaximumHeight(log_height * 2)
         self.log_text.setObjectName("log_text")
         log_layout.addWidget(self.log_text)
 
@@ -666,7 +676,7 @@ class DuplicatesDashboard(QWidget):
 
         # Configuración visual
         self.duplicates_table.setAlternatingRowColors(True)
-        self.duplicates_table.setShowGrid(True)
+        self.duplicates_table.setShowGrid(False)
         self.duplicates_table.setCornerButtonEnabled(False)
         self.duplicates_table.setSelectionBehavior(
             QTableView.SelectionBehavior.SelectRows
@@ -732,12 +742,12 @@ class DuplicatesDashboard(QWidget):
 
         elif method_index == 1:  # Híbrido
             self.current_method = "hybrid"
-            self.method_info.setText("Confirmacion: filtro rapido + hash")
+            self.method_info.setText("Filtro rápido + comparación por hash")
             self.scan_btn.setText("Analizar hibrido")
 
         else:  # Profundo
             self.current_method = "deep"
-            self.method_info.setText("Exacto: hash completo")
+            self.method_info.setText("Hash: contenido o muestras (>5000 MB)")
             self.scan_btn.setText("Analizar profundo")
 
         self.update_preview_button_state()
@@ -799,8 +809,7 @@ class DuplicatesDashboard(QWidget):
         if folder:
             self.current_folder = folder
             folder_display = self._format_folder_display(scope_type, folder)
-            self.current_folder_label.setText(folder_display)
-            self.current_folder_label.setToolTip(folder)
+            self.current_folder_label.set_path(folder_display, folder)
             self.scan_btn.setEnabled(True)
             self.apply_scan_button_style()  # ✅ NUEVO: Reaplicar estilo azul
             self.log_message(f"✅ {scope_type} seleccionada: {folder}")
@@ -823,6 +832,12 @@ class DuplicatesDashboard(QWidget):
         if not self.current_folder:
             QMessageBox.warning(self, "Error", "Primero selecciona una carpeta o disco")
             return
+
+        self.method_combo.setEnabled(False)
+        self.result_status_label.setText("Analizando… La selección estará disponible al terminar.")
+        self._result_method = self.current_method
+        self.delete_btn.setEnabled(False)
+        self.move_btn.setEnabled(False)
 
         # Limpiar resultados anteriores
         self.duplicates_data = {}
@@ -875,6 +890,11 @@ class DuplicatesDashboard(QWidget):
     def on_duplicates_found(self, duplicates_data, statistics):
         """Maneja duplicados encontrados en tiempo real - FIRMA CORRECTA"""
         self.duplicates_data = duplicates_data
+        method = getattr(self, "_result_method", "fast")
+        if method == "fast":
+            self.result_status_label.setText("Candidatos por nombre, extensión y tamaño. El contenido todavía no está confirmado.")
+        else:
+            self.result_status_label.setText("Coincidencias por hash. Los archivos de más de 5000 MB se comparan mediante muestras y siguen siendo candidatos.")
         self.log_message(f"🔍 Encontrados {len(duplicates_data)} grupos de duplicados")
 
         # Actualizar estadísticas usando las CLAVES CORRECTAS del worker
@@ -916,6 +936,9 @@ class DuplicatesDashboard(QWidget):
     def on_scan_finished(self):
         """Maneja finalización del escaneo"""
         self.scan_btn.setEnabled(True)
+        self.method_combo.setEnabled(True)
+        if not self.duplicates_data:
+            self.result_status_label.setText("Análisis terminado: no se encontraron coincidencias.")
         self.apply_scan_button_style()  # ✅ NUEVO: Reaplicar estilo azul
         self.progress_bar.setVisible(False)
         if self.scan_task_id:
@@ -926,6 +949,8 @@ class DuplicatesDashboard(QWidget):
     def on_scan_error(self, error_message):
         """Maneja errores del escaneo"""
         self.scan_btn.setEnabled(True)
+        self.method_combo.setEnabled(True)
+        self.result_status_label.setText("No se pudo completar el análisis. Revisa la carpeta y vuelve a intentarlo.")
         self.apply_scan_button_style()  # ✅ NUEVO: Reaplicar estilo azul
         self.progress_bar.setVisible(False)
         if self.scan_task_id:
@@ -1028,6 +1053,8 @@ class DuplicatesDashboard(QWidget):
             # Obtener filas seleccionadas
             selected_rows = self.duplicates_model.get_checked_rows()
             total_selected = len(selected_rows)
+            self.delete_btn.setEnabled(total_selected > 0 and not self.scan_task_id)
+            self.move_btn.setEnabled(total_selected > 0 and not self.scan_task_id)
             selected_space = 0
 
             # Calcular espacio de seleccionados
@@ -1119,6 +1146,13 @@ class DuplicatesDashboard(QWidget):
                                     "size": stat_info.st_size,
                                     "date": stat_info.st_mtime,
                                     "hash": hash_value,
+                                    "match_status": (
+                                        "Candidato: contenido sin confirmar"
+                                        if getattr(self, "_result_method", "fast") == "fast"
+                                        else "Candidato: comparación por muestras"
+                                        if stat_info.st_size > 5000 * 1024 * 1024
+                                        else "Coincidencia por hash de contenido"
+                                    ),
                                     "is_original": False,  # Se marcará después
                                 }
                             )
@@ -1325,6 +1359,16 @@ class DuplicatesDashboard(QWidget):
                 f"Puedes eliminar cualquiera de los dos tipos.",
             )
             return
+        selected_set = set(selected_files)
+        affected = [paths for paths in self.duplicates_data.values()
+                    if any(path in selected_set for path in paths)]
+        retained = [path for paths in affected for path in paths
+                    if path not in selected_set and path.exists()]
+        empty_groups = sum(not any(path not in selected_set and path.exists() for path in paths)
+                           for paths in affected)
+        retained_text = "\n".join(f"• {path}" for path in retained[:10]) or "Ninguna copia."
+        if empty_groups:
+            retained_text += f"\nAtención: {empty_groups} grupos quedarán sin ninguna copia en su carpeta."
 
         # Mostrar lista detallada de archivos a eliminar
         file_list = "\n".join(
@@ -1339,11 +1383,13 @@ class DuplicatesDashboard(QWidget):
         # Confirmar eliminación con detalles
         reply = QMessageBox.question(
             self,
-            "🗑️ Confirmar envío a papelera",
-            f"¿Quieres enviar a la papelera estos {len(selected_files)} archivos duplicados?\n\n"
+            "Confirmar retirada de archivos",
+            f"Se retirarán {len(selected_files)} archivos a la papelera. Si no hay soporte, se moverán a .quarantine junto a cada archivo.\n\n"
             f"📂 Archivos a eliminar:\n{file_list}\n\n"
-            f"💡 Se intentará usar la papelera del sistema. Si no está disponible, se eliminarán del disco.",
+            f"Copias que se conservan sin marcar:\n{retained_text}\n\n"
+            "Revisa los candidatos: una coincidencia por nombre o muestras no confirma contenido idéntico.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
 
         if reply == QMessageBox.StandardButton.Yes:
@@ -1361,7 +1407,7 @@ class DuplicatesDashboard(QWidget):
                         file_path, use_trash=True
                     ):
                         deleted_count += 1
-                        self.log_message(f"✅ Enviado a papelera: {file_path.name}")
+                        self.log_message(f"✅ {file_path.name} retirado a: {self.transaction_manager.last_removal_destination}")
                     else:
                         error_count += 1
                         reason = (
@@ -1497,6 +1543,7 @@ class DuplicatesDashboard(QWidget):
 
             # Crear menú contextual
             menu = QMenu(self)
+            apply_menu_surface(menu)
 
             # Verificar tipo de archivo y agregar acciones apropiadas
             file_ext = file_path.suffix.lower()
@@ -1706,39 +1753,28 @@ class DuplicatesDashboard(QWidget):
     def delete_single_file(self, row):
         """Elimina un archivo individual"""
         try:
-            # Obtener información del archivo
-            model = self.duplicates_table.model()
-            name_data = model.data(model.index(row, 1), Qt.ItemDataRole.DisplayRole)
-            location_data = model.data(model.index(row, 2), Qt.ItemDataRole.DisplayRole)
-
-            if not name_data or not location_data:
+            row_data = self.duplicates_model.get_row_data(row)
+            if not row_data or not row_data.get("path"):
                 return
-
-            # Extraer nombre sin emojis
-            file_name_raw = str(name_data)
-            if file_name_raw.startswith("🟢 ") or file_name_raw.startswith("🔴 "):
-                file_name = file_name_raw[2:]
-            else:
-                file_name = file_name_raw
-
-            # Construir ruta completa
-            location_path = str(location_data)
-            file_path = Path(location_path) / file_name
+            file_path = Path(row_data["path"])
+            file_name = file_path.name
+            location_path = str(file_path.parent)
 
             # Confirmar eliminación
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Confirmar Eliminación")
-            msg_box.setText(f"¿Estás seguro de que quieres eliminar este archivo?")
+            msg_box.setText("¿Retirar este archivo a la papelera? Si no hay soporte, se moverá a .quarantine junto a su carpeta. Las demás copias se conservan.")
             msg_box.setInformativeText(f"📄 {file_name}\n📂 {location_path}")
             msg_box.setIcon(QMessageBox.Icon.Question)
 
             # Botones personalizados
             delete_btn = msg_box.addButton(
-                "🗑️ Eliminar", QMessageBox.ButtonRole.AcceptRole
+                "Retirar archivo", QMessageBox.ButtonRole.AcceptRole
             )
             cancel_btn = msg_box.addButton(
                 "❌ Cancelar", QMessageBox.ButtonRole.RejectRole
             )
+            msg_box.setDefaultButton(cancel_btn)
 
             msg_box.exec()
             clicked_button = msg_box.clickedButton()
@@ -1752,7 +1788,7 @@ class DuplicatesDashboard(QWidget):
                     if self.transaction_manager.safe_delete_file(
                         file_path, use_trash=True
                     ):
-                        self.log_message(f"🗑️ Archivo enviado a papelera: {file_name}")
+                        self.log_message(f"{file_name} retirado a: {self.transaction_manager.last_removal_destination}")
                     else:
                         QMessageBox.warning(
                             self,
@@ -1851,6 +1887,7 @@ class DuplicatesDashboard(QWidget):
                 [
                     f"Nombre: {row_data.get('name', 'N/A')}",
                     f"Estado: {status}",
+                    f"Comparación: {row_data.get('match_status', 'Candidato: contenido sin confirmar')}",
                     f"Ruta: {row_data.get('path', 'N/A')}",
                     f"Grupo hash: {row_data.get('hash', 'N/A')}",
                     f"Tamaño: {self.format_file_size(row_data.get('size', 0))}",
