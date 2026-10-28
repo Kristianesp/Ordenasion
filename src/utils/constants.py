@@ -13,8 +13,13 @@ CATEGORIAS = {
     "CODIGO": [".py", ".js", ".html", ".css", ".cpp", ".c", ".java", ".php", ".rb", ".go"]
 }
 
-# Carpeta para archivos no categorizados
-VARIOS_FOLDER = "VARIOS_REVISAR"
+# Categoría y carpeta para archivos no categorizados.
+# Antes convivían "VARIOS" (donde acababan los archivos) y "VARIOS_REVISAR"
+# (que se creaba vacía). Ahora hay una sola carpeta; el nombre antiguo se
+# reconoce como carpeta de categoría para no reorganizarla.
+VARIOS_CATEGORY = "VARIOS"
+VARIOS_FOLDER = "VARIOS"
+LEGACY_VARIOS_FOLDERS = ("VARIOS_REVISAR",)
 
 # 🎨 Colores Modernos con Accesibilidad WCAG 2.1 AA
 COLORS = {

@@ -5,26 +5,57 @@ Maneja el procesamiento en segundo plano para análisis y organización
 """
 
 import os
-import shutil
-import mimetypes
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Iterable, Tuple
 from collections import Counter, defaultdict
 from datetime import datetime
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from src.utils.constants import VARIOS_FOLDER
+from src.utils.constants import VARIOS_CATEGORY
+from src.utils.logger import error as log_error, warn as log_warn
+from .category_manager import guess_category
 from .hash_manager import HashManager
-from .transaction_manager import TransactionManager
+from .transaction_manager import (
+    ROLE_OVERWRITE_BACKUP,
+    STATUS_CANCELLED,
+    STATUS_COMPLETED,
+    STATUS_COMPLETED_WITH_ERRORS,
+    STATUS_FAILED,
+    TransactionManager,
+)
 from .audio_index import audio_metadata_service
+from .fs_safety import (
+    has_hidden_system_attributes,
+    is_inside,
+    is_junk_file_name,
+    is_link_or_junction,
+    is_system_path,
+    long_path,
+    normalize,
+)
 from .organization_conflicts import (
     CONFLICT_POLICY_RENAME,
     CONFLICT_POLICY_SKIP,
-    build_base_destination,
     find_available_name,
-    resolve_destination,
 )
+from .organization_plan import (
+    ACTION_INVALID,
+    ACTION_MISSING,
+    ACTION_OVERWRITE,
+    ACTION_SKIP,
+    OrganizationPlan,
+    build_organization_plan,
+    known_category_folder_names,
+)
+
+# Estados legibles del resultado de una organización
+RESULT_LABELS = {
+    STATUS_COMPLETED: "Completada",
+    STATUS_COMPLETED_WITH_ERRORS: "Completada con errores",
+    STATUS_CANCELLED: "Cancelada",
+    STATUS_FAILED: "Error",
+}
 
 
 class AnalysisWorker(QThread):
@@ -33,6 +64,7 @@ class AnalysisWorker(QThread):
     # Señales para comunicación con la UI
     progress_update = pyqtSignal(str)
     analysis_complete = pyqtSignal(list, list, dict)
+    analysis_cancelled = pyqtSignal()
     error_occurred = pyqtSignal(str)
 
     def __init__(
@@ -45,38 +77,56 @@ class AnalysisWorker(QThread):
         min_file_size_mb: int = 0,
         ignored_extensions: Optional[List[str]] = None,
         ignored_paths: Optional[List[str]] = None,
+        category_manager=None,
+        excluded_folder_names: Optional[Iterable[str]] = None,
     ):
         super().__init__()
         self.folder_path = folder_path
         self.categories = categories
         self.ext_to_categoria = ext_to_categoria
+        self.category_manager = category_manager
         self.min_percentage = min_percentage  # Porcentaje mínimo de similitud
         self.advanced_analysis = advanced_analysis  # Nuevo: análisis avanzado
         self.min_file_size_bytes = max(0, int(min_file_size_mb)) * 1024 * 1024
         self.ignored_extensions = {
-            ext if str(ext).startswith(".") else f".{str(ext)}"
+            (ext if str(ext).startswith(".") else f".{str(ext)}").lower()
             for ext in (ignored_extensions or [])
             if str(ext).strip()
         }
         self.ignored_paths = [
-            str(Path(path)).lower()
+            normalize(Path(path))
             for path in (ignored_paths or [])
             if str(path).strip()
         ]
+        # Carpetas de categoría que ya existen: no se reorganizan
+        if category_manager is not None and hasattr(category_manager, "get_category_folder_names"):
+            folder_names = set(category_manager.get_category_folder_names())
+        else:
+            folder_names = known_category_folder_names(list((categories or {}).keys()))
+        folder_names |= {os.path.normcase(name) for name in (excluded_folder_names or [])}
+        self.category_folder_names = folder_names
         self.hash_manager = HashManager()
         self.is_running = True
+        self.was_cancelled = False
 
     def run(self):
         """Ejecuta el análisis de la carpeta"""
         try:
             self.progress_update.emit("🔍 Iniciando análisis de la carpeta...")
 
+            # Una sola pasada por la carpeta raíz
+            folder_entries, file_entries = self._scan_root()
+
             # Analizar carpetas
-            folder_movements = self.analyze_folders()
+            folder_movements = self.analyze_folders(folder_entries)
+            if not self.is_running:
+                return self._emit_cancelled()
             self.progress_update.emit(f"📁 Analizadas {len(folder_movements)} carpetas")
 
             # Analizar archivos sueltos
-            file_movements = self.analyze_loose_files()
+            file_movements = self.analyze_loose_files(file_entries)
+            if not self.is_running:
+                return self._emit_cancelled()
             self.progress_update.emit(
                 f"📄 Analizados {len(file_movements)} archivos sueltos"
             )
@@ -90,23 +140,79 @@ class AnalysisWorker(QThread):
         except Exception as e:
             self.error_occurred.emit(f"❌ Error durante el análisis: {str(e)}")
 
-    def analyze_folders(self) -> List[Dict[str, Any]]:
+    def _emit_cancelled(self):
+        self.was_cancelled = True
+        self.progress_update.emit("⏹️ Análisis cancelado por el usuario")
+        self.analysis_cancelled.emit()
+
+    # ------------------------------------------------------------------
+    # Recorrido
+    # ------------------------------------------------------------------
+    def _scan_root(self) -> Tuple[List[os.DirEntry], List[os.DirEntry]]:
+        """Lista la carpeta raíz una vez y separa carpetas y archivos."""
+        folders: List[os.DirEntry] = []
+        files: List[os.DirEntry] = []
+        root = Path(self.folder_path)
+        if not root.is_dir():
+            return folders, files
+        try:
+            with os.scandir(long_path(root)) as entries:
+                for entry in entries:
+                    if not self.is_running:
+                        break
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            folders.append(entry)
+                        elif entry.is_file(follow_symlinks=False):
+                            files.append(entry)
+                    except OSError:
+                        continue
+        except PermissionError:
+            self.progress_update.emit(f"⚠️ Sin permisos para acceder a {root}")
+        folders.sort(key=lambda entry: entry.name.lower())
+        files.sort(key=lambda entry: entry.name.lower())
+        return folders, files
+
+    @staticmethod
+    def _entry_path(entry) -> Path:
+        path = entry.path if isinstance(entry, os.DirEntry) else str(entry)
+        if path.startswith("\\\\?\\UNC\\"):
+            path = "\\\\" + path[8:]
+        elif path.startswith("\\\\?\\"):
+            path = path[4:]
+        return Path(path)
+
+    @staticmethod
+    def _entry_stat(entry):
+        if isinstance(entry, os.DirEntry):
+            return entry.stat(follow_symlinks=False)
+        return os.stat(long_path(entry), follow_symlinks=False)
+
+    def analyze_folders(self, folder_entries: Optional[List] = None) -> List[Dict[str, Any]]:
         """Analiza carpetas y las envía a VARIOS si no superan el umbral de similitud."""
         folder_movements = []
-        folder_path = Path(self.folder_path)
+        if folder_entries is None:
+            folder_entries, _ = self._scan_root()
 
-        if not folder_path.exists() or not folder_path.is_dir():
-            return folder_movements
-
-        # Obtener solo carpetas (no archivos)
-        folders = [item for item in folder_path.iterdir() if item.is_dir()]
-
-        for folder in folders:
+        for entry in folder_entries:
+            if not self.is_running:
+                break
+            folder = self._entry_path(entry)
             try:
+                if is_link_or_junction(entry):
+                    self.progress_update.emit(
+                        f"🔗 Omitido enlace o junction: {folder.name}"
+                    )
+                    continue
                 # FILTRO INTELIGENTE: Solo excluir carpetas del sistema críticas
-                if self.is_excluded_path(folder) or self.is_system_folder(folder):
+                if self.is_excluded_path(folder) or self.is_system_folder(folder, entry):
                     self.progress_update.emit(
                         f"🚫 Excluyendo carpeta del sistema: {folder.name}"
+                    )
+                    continue
+                if os.path.normcase(folder.name) in self.category_folder_names:
+                    self.progress_update.emit(
+                        f"📂 Carpeta de categoría existente (no se reorganiza): {folder.name}"
                     )
                     continue
 
@@ -120,7 +226,7 @@ class AnalysisWorker(QThread):
                     main_category = max(category_counts.items(), key=lambda x: x[1])[0]
                     percentage = (category_counts[main_category] / total_files) * 100
                     assigned_category = (
-                        main_category if percentage >= self.min_percentage else "VARIOS"
+                        main_category if percentage >= self.min_percentage else VARIOS_CATEGORY
                     )
                     # Si la carpeta es demasiado heterogénea para el umbral elegido,
                     # se conserva visible en resultados pero se envía a VARIOS para
@@ -151,7 +257,7 @@ class AnalysisWorker(QThread):
                     # Carpeta vacía - incluirla también
                     movement = {
                         "folder": folder,
-                        "category": "VARIOS",
+                        "category": VARIOS_CATEGORY,
                         "total_files": 0,
                         "size": 0,
                         "percentage": 0,
@@ -172,32 +278,29 @@ class AnalysisWorker(QThread):
         return folder_movements
 
     def analyze_folder_content(self, folder_path: Path) -> tuple:
-        """Analiza el contenido de una carpeta específica"""
+        """Analiza el contenido de una carpeta específica (sin seguir enlaces)"""
         total_files = 0
         total_size = 0
         category_counts = Counter()
 
         try:
-            # Intentar acceder al contenido de la carpeta
-            for item in folder_path.iterdir():
-                try:
-                    if item.is_file():
-                        if self._should_skip_file(item):
+            with os.scandir(long_path(folder_path)) as entries:
+                for entry in entries:
+                    if not self.is_running:
+                        break
+                    try:
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        stat_result = entry.stat(follow_symlinks=False)
+                        item = Path(folder_path) / entry.name
+                        if self._should_skip_file(item, stat_result):
                             continue
                         total_files += 1
-                        try:
-                            total_size += item.stat().st_size
-                        except (OSError, PermissionError):
-                            # Si no se puede obtener el tamaño, continuar
-                            pass
-
-                        # Categorizar archivo
-                        category = self._categorize_path(item)
-                        category_counts[category] += 1
-
-                except (PermissionError, OSError):
-                    # Ignorar archivos individuales sin permisos
-                    continue
+                        total_size += stat_result.st_size
+                        category_counts[self._categorize_path(item)] += 1
+                    except (PermissionError, OSError):
+                        # Ignorar archivos individuales sin permisos
+                        continue
 
         except PermissionError:
             self.progress_update.emit(
@@ -210,48 +313,25 @@ class AnalysisWorker(QThread):
 
         return total_files, total_size, category_counts
 
-    def is_system_folder(self, folder_path: Path) -> bool:
-        """Determina si una carpeta es del sistema y debe ser excluida"""
-        folder_name = folder_path.name.lower()
+    def is_system_folder(self, folder_path: Path, entry=None) -> bool:
+        """Determina si una carpeta es del sistema y debe ser excluida.
 
-        # CARPETAS DEL SISTEMA CRÍTICAS que SÍ deben filtrarse
-        system_folders = {
-            "program files",
-            "program files (x86)",
-            "windows",
-            "windowsapps",
-            "wpsystem",
-            "system volume information",
-            "$recycle.bin",
-            "recovery",
-            "config.msi",
-            "msdownld.tmp",  # Solo si es del sistema, no del usuario
-        }
-
-        # Verificar si es carpeta del sistema
-        if folder_name in system_folders:
+        Se compara por componentes de ruta (relativos a la carpeta analizada)
+        y contra las carpetas reales del sistema, nunca por subcadenas.
+        """
+        if is_system_path(folder_path, root=self.folder_path):
             return True
 
-        # Verificar si está en rutas del sistema
+        # Carpetas ocultas+sistema, o ocultas con nombre de sistema ($...)
         try:
-            # Verificar si está en C:\Windows o C:\Program Files
-            if (
-                "windows" in str(folder_path).lower()
-                or "program files" in str(folder_path).lower()
-            ):
-                return True
-        except:
-            pass
-
-        # Verificar si es carpeta oculta del sistema
-        try:
-            if (
-                folder_path.is_dir() and folder_path.stat().st_file_attributes & 0x2
-            ):  # Hidden
-                if folder_name.startswith("$") or folder_name.startswith("."):
-                    return True
-        except:
-            pass
+            stat_result = self._entry_stat(entry if entry is not None else folder_path)
+        except OSError:
+            return False
+        if has_hidden_system_attributes(stat_result):
+            return True
+        attributes = getattr(stat_result, "st_file_attributes", 0) or 0
+        if attributes & 0x2 and folder_path.name.startswith("$"):
+            return True
 
         # NO es carpeta del sistema - incluirla
         return False
@@ -261,59 +341,55 @@ class AnalysisWorker(QThread):
         contents = []
 
         try:
-            for item in folder_path.iterdir():
-                try:
-                    if item.is_file():
-                        if self._should_skip_file(item):
-                            continue
-                        # Archivo individual
-                        file_size = 0
-                        try:
-                            file_size = item.stat().st_size
-                        except (OSError, PermissionError):
-                            pass
-
-                        extension = item.suffix.lower()
-                        category = self._categorize_path(item)
-
-                        contents.append(
-                            {
-                                "type": "file",
-                                "path": item,
-                                "name": item.name,
-                                "size": file_size,
-                                "category": category,
-                                "extension": extension,
-                            }
-                        )
-                    elif item.is_dir():
-                        # Subcarpeta
-                        try:
-                            sub_files = len([f for f in item.iterdir() if f.is_file()])
+            with os.scandir(long_path(folder_path)) as entries:
+                for entry in entries:
+                    item = Path(folder_path) / entry.name
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            stat_result = entry.stat(follow_symlinks=False)
+                            if self._should_skip_file(item, stat_result):
+                                continue
                             contents.append(
                                 {
-                                    "type": "subfolder",
+                                    "type": "file",
                                     "path": item,
                                     "name": item.name,
-                                    "file_count": sub_files,
-                                    "is_expandable": True,
+                                    "size": stat_result.st_size,
+                                    "category": self._categorize_path(item),
+                                    "extension": item.suffix.lower(),
                                 }
                             )
-                        except (PermissionError, OSError):
-                            # Subcarpeta sin permisos
-                            contents.append(
-                                {
-                                    "type": "subfolder",
-                                    "path": item,
-                                    "name": item.name,
-                                    "file_count": 0,
-                                    "is_expandable": False,
-                                    "no_access": True,
-                                }
-                            )
+                        elif entry.is_dir(follow_symlinks=False) and not is_link_or_junction(entry):
+                            # Subcarpeta
+                            try:
+                                with os.scandir(long_path(item)) as sub_entries:
+                                    sub_files = sum(
+                                        1 for sub in sub_entries if sub.is_file(follow_symlinks=False)
+                                    )
+                                contents.append(
+                                    {
+                                        "type": "subfolder",
+                                        "path": item,
+                                        "name": item.name,
+                                        "file_count": sub_files,
+                                        "is_expandable": True,
+                                    }
+                                )
+                            except (PermissionError, OSError):
+                                # Subcarpeta sin permisos
+                                contents.append(
+                                    {
+                                        "type": "subfolder",
+                                        "path": item,
+                                        "name": item.name,
+                                        "file_count": 0,
+                                        "is_expandable": False,
+                                        "no_access": True,
+                                    }
+                                )
 
-                except (PermissionError, OSError):
-                    continue
+                    except (PermissionError, OSError):
+                        continue
 
         except PermissionError:
             self.progress_update.emit(
@@ -326,78 +402,72 @@ class AnalysisWorker(QThread):
 
         return contents
 
-    def analyze_loose_files(self) -> List[Dict[str, Any]]:
+    def analyze_loose_files(self, file_entries: Optional[List] = None) -> List[Dict[str, Any]]:
         """Analiza archivos sueltos en la carpeta principal con análisis avanzado"""
         file_movements = []
-        folder_path = Path(self.folder_path)
+        if file_entries is None:
+            _, file_entries = self._scan_root()
 
-        if not folder_path.exists() or not folder_path.is_dir():
-            return file_movements
+        for entry in file_entries:
+            if not self.is_running:
+                break
+            file = self._entry_path(entry)
+            try:
+                stat_result = self._entry_stat(entry)
+                # Información básica del archivo
+                if self._should_skip_file(file, stat_result):
+                    continue
+                extension = file.suffix.lower()
 
-        try:
-            # Obtener solo archivos (no carpetas)
-            files = [item for item in folder_path.iterdir() if item.is_file()]
+                # Categorizar archivo
+                category = self._categorize_path(file)
 
-            for file in files:
-                try:
-                    # Información básica del archivo
-                    if self._should_skip_file(file):
-                        continue
-                    file_size = file.stat().st_size
-                    extension = file.suffix.lower()
-                    file_date = file.stat().st_mtime
+                # Análisis avanzado (si está habilitado)
+                advanced_info = {}
+                if self.advanced_analysis:
+                    advanced_info = self._get_advanced_file_info(file, stat_result)
 
-                    # Categorizar archivo
-                    category = self._categorize_path(file)
+                # Crear diccionario completo del archivo
+                movement = {
+                    "file": file,
+                    "category": category,
+                    "extension": extension,
+                    "size": stat_result.st_size,
+                    "date": stat_result.st_mtime,
+                    "advanced_info": advanced_info,
+                    "is_expandable": True,  # Para mostrar detalles avanzados
+                }
 
-                    # Análisis avanzado (si está habilitado)
-                    advanced_info = {}
-                    if self.advanced_analysis:
-                        advanced_info = self._get_advanced_file_info(file)
-
-                    # Crear diccionario completo del archivo
-                    movement = {
-                        "file": file,
-                        "category": category,
-                        "extension": extension,
-                        "size": file_size,
-                        "date": file_date,
-                        "advanced_info": advanced_info,
-                        "is_expandable": True,  # Para mostrar detalles avanzados
-                    }
-
-                    # Agregar información adicional para UI
-                    if advanced_info:
-                        movement.update(
-                            {
-                                "has_advanced_info": True,
-                                "file_type": advanced_info.get("type", "unknown"),
-                                "description": advanced_info.get("description", ""),
-                                "metadata": advanced_info.get("metadata", {}),
-                            }
-                        )
-
-                    file_movements.append(movement)
-
-                except Exception as e:
-                    self.progress_update.emit(
-                        f"⚠️ Error analizando archivo {file.name}: {str(e)}"
+                # Agregar información adicional para UI
+                if advanced_info:
+                    movement.update(
+                        {
+                            "has_advanced_info": True,
+                            "file_type": advanced_info.get("type", "unknown"),
+                            "description": advanced_info.get("description", ""),
+                            "metadata": advanced_info.get("metadata", {}),
+                        }
                     )
 
-        except Exception as e:
-            self.progress_update.emit(
-                f"⚠️ Error accediendo a archivos sueltos: {str(e)}"
-            )
+                file_movements.append(movement)
+
+            except Exception as e:
+                self.progress_update.emit(
+                    f"⚠️ Error analizando archivo {file.name}: {str(e)}"
+                )
 
         return file_movements
 
-    def _get_advanced_file_info(self, file_path: Path) -> Dict[str, Any]:
-        """Obtiene información avanzada de un archivo"""
+    def _get_advanced_file_info(self, file_path: Path, stat_result=None) -> Dict[str, Any]:
+        """Obtiene información avanzada de un archivo.
+
+        No calcula hashes: el contenido solo se lee cuando hace falta
+        compararlo (``compute_file_hash`` o la comprobación de duplicados).
+        """
         info = {"type": "file", "description": "", "metadata": {}, "hash": None}
 
         try:
-            # Obtener información básica
-            stat = file_path.stat()
+            stat = stat_result if stat_result is not None else file_path.stat()
             info["metadata"] = {
                 "size_bytes": stat.st_size,
                 "created": datetime.fromtimestamp(stat.st_ctime),
@@ -405,49 +475,31 @@ class AnalysisWorker(QThread):
                 "accessed": datetime.fromtimestamp(stat.st_atime),
             }
 
-            # Calcular hash para archivos pequeños (optimización)
-            if stat.st_size < 50 * 1024 * 1024:  # Menos de 50MB
-                hash_value = self.hash_manager.calculate_file_hash(file_path, "md5")
-                if hash_value:
-                    info["hash"] = hash_value
-
             # Detectar tipo de archivo por extensión
             ext = file_path.suffix.lower()
             if audio_metadata_service.is_audio_file(file_path):
                 info["type"] = "audio"
                 info["description"] = "Audio"
                 audio_meta = audio_metadata_service.extract_metadata(file_path)
-                info["metadata"].update(
-                    {
-                        "audio": {
-                            "artist": audio_meta.artist,
-                            "album_artist": audio_meta.album_artist,
-                            "title": audio_meta.title,
-                            "album": audio_meta.album,
-                            "track_number": audio_meta.track_number,
-                            "disc_number": audio_meta.disc_number,
-                            "year": audio_meta.year,
-                            "genre": audio_meta.genre,
-                            "duration": audio_meta.duration,
-                            "bitrate": audio_meta.bitrate,
-                            "sample_rate": audio_meta.sample_rate,
-                            "channels": audio_meta.channels,
-                            "bit_depth": audio_meta.bit_depth,
-                            "lossless": audio_meta.lossless,
-                            "codec": audio_meta.codec,
-                            "source": audio_meta.source,
-                            "error": audio_meta.error,
-                        }
-                    }
-                )
-                info["metadata"]["size_bytes"] = stat.st_size
-                info["metadata"]["created"] = datetime.fromtimestamp(stat.st_ctime)
-                info["metadata"]["modified"] = datetime.fromtimestamp(stat.st_mtime)
-                info["metadata"]["accessed"] = datetime.fromtimestamp(stat.st_atime)
-                if not info.get("hash") and stat.st_size < 50 * 1024 * 1024:
-                    hash_value = self.hash_manager.calculate_file_hash(file_path, "md5")
-                    if hash_value:
-                        info["hash"] = hash_value
+                info["metadata"]["audio"] = {
+                    "artist": audio_meta.artist,
+                    "album_artist": audio_meta.album_artist,
+                    "title": audio_meta.title,
+                    "album": audio_meta.album,
+                    "track_number": audio_meta.track_number,
+                    "disc_number": audio_meta.disc_number,
+                    "year": audio_meta.year,
+                    "genre": audio_meta.genre,
+                    "duration": audio_meta.duration,
+                    "bitrate": audio_meta.bitrate,
+                    "sample_rate": audio_meta.sample_rate,
+                    "channels": audio_meta.channels,
+                    "bit_depth": audio_meta.bit_depth,
+                    "lossless": audio_meta.lossless,
+                    "codec": audio_meta.codec,
+                    "source": audio_meta.source,
+                    "error": audio_meta.error,
+                }
             elif ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp"]:
                 info["type"] = "image"
                 info["description"] = "Imagen"
@@ -472,70 +524,42 @@ class AnalysisWorker(QThread):
 
         return info
 
+    def compute_file_hash(self, file_path: Path) -> Optional[str]:
+        """Calcula el hash MD5 bajo demanda (no durante el análisis)."""
+        return self.hash_manager.calculate_file_hash(file_path, "md5")
+
     def _categorize_path(self, file_path: Path) -> str:
-        """Categoriza con este orden: extensión, MIME, heurísticas por nombre y VARIOS."""
-        extension = file_path.suffix.lower()
-        category = self.ext_to_categoria.get(extension)
-        if category:
-            return category
+        """Delegación única de la categorización en CategoryManager.
 
-        guessed_type, _ = mimetypes.guess_type(str(file_path))
-        if guessed_type:
-            top_level_type = guessed_type.split("/", 1)[0]
-            if top_level_type == "audio":
-                return "MUSICA"
-            if top_level_type == "video":
-                return "VIDEOS"
-            if top_level_type == "image":
-                return "IMAGENES"
-            if any(
-                token in guessed_type
-                for token in ("pdf", "word", "sheet", "presentation", "json", "xml")
-            ):
-                return "DOCUMENTOS"
-
-        filename = file_path.name.lower()
-        token_map = {
-            "MUSICA": ("track", "album", "song", "mix", "audio"),
-            "VIDEOS": ("movie", "trailer", "video", "clip", "episode"),
-            "IMAGENES": ("img", "screenshot", "photo", "wallpaper", "camera"),
-            "DOCUMENTOS": (
-                "invoice",
-                "report",
-                "manual",
-                "doc",
-                "cv",
-                "resume",
-                "readme",
-            ),
-            "CODIGO": ("package", "docker", "config", "script", "source", "setup"),
-        }
-        for guessed_category, tokens in token_map.items():
-            if any(token in filename for token in tokens):
-                return guessed_category
-
-        return "VARIOS"
+        Respeta reglas personalizadas; sin gestor se usa la misma lógica de
+        extensión, MIME, heurísticas por nombre y VARIOS.
+        """
+        if self.category_manager is not None:
+            return self.category_manager.categorize_file(file_path)
+        return guess_category(file_path, self.ext_to_categoria)
 
     def is_excluded_path(self, path: Path) -> bool:
         """Determina si una ruta debe excluirse del análisis."""
-        normalized = str(path).lower()
-        return any(
-            normalized == ignored or normalized.startswith(f"{ignored}{os.sep}")
-            for ignored in self.ignored_paths
-        )
+        return any(is_inside(path, ignored) for ignored in self.ignored_paths)
 
-    def _should_skip_file(self, file_path: Path) -> bool:
-        """Aplica exclusiones por ruta, extensión y tamaño mínimo."""
-        if self.is_excluded_path(file_path):
+    def _should_skip_file(self, file_path: Path, stat_result=None) -> bool:
+        """Aplica exclusiones: basura/sistema, ruta, extensión y tamaño mínimo."""
+        if is_junk_file_name(file_path.name):
+            return True
+        if self.ignored_paths and self.is_excluded_path(file_path):
             return True
         if file_path.suffix.lower() in self.ignored_extensions:
             return True
+        if stat_result is None:
+            try:
+                stat_result = os.stat(long_path(file_path), follow_symlinks=False)
+            except OSError:
+                return True
+        if has_hidden_system_attributes(stat_result):
+            return True
         if self.min_file_size_bytes <= 0:
             return False
-        try:
-            return file_path.stat().st_size < self.min_file_size_bytes
-        except OSError:
-            return True
+        return stat_result.st_size < self.min_file_size_bytes
 
     def calculate_statistics(
         self, folder_movements: List[Dict], file_movements: List[Dict]
@@ -570,13 +594,18 @@ class AnalysisWorker(QThread):
         }
 
     def stop(self):
-        """Detiene el worker"""
+        """Detiene el worker (los bucles comprueban ``is_running``)"""
         self.is_running = False
 
 
 class OrganizeWorker(QThread):
     """Worker para organizar archivos y carpetas en segundo plano
-    🚀 MEJORADO: Con sistema de transacciones y rollback automático"""
+    🚀 MEJORADO: Con sistema de transacciones y rollback automático
+
+    Ejecuta un ``OrganizationPlan`` (el mismo que mostró la vista previa).
+    El resultado final queda en ``summary["status"]``: completado,
+    completado con errores, cancelado o error.
+    """
 
     # Señales para comunicación con la UI
     progress_update = pyqtSignal(str)
@@ -595,74 +624,134 @@ class OrganizeWorker(QThread):
         check_duplicates: bool = False,
         protected_paths: Optional[List[str]] = None,
         conflict_policy: str = CONFLICT_POLICY_RENAME,
+        transaction_manager: Optional[TransactionManager] = None,
+        plan: Optional[OrganizationPlan] = None,
+        category_folder: Optional[Callable[[str], str]] = None,
     ):
         super().__init__()
         self.source_folder = source_folder
         self.folder_movements = folder_movements
         self.file_movements = file_movements
         self.is_running = True
-        self.transaction_manager = TransactionManager()
+        # Gestor compartido con la ventana para poder deshacer en la sesión
+        self.transaction_manager = transaction_manager or TransactionManager()
         self.current_transaction_id = None
         self.organize_by_date = organize_by_date
         self.check_duplicates = check_duplicates
         self.conflict_policy = conflict_policy
+        self.plan = plan
+        self.category_folder = category_folder
         self.hash_manager = HashManager()
         self.protected_paths = [
-            str(Path(path)).lower()
+            normalize(Path(path))
             for path in (protected_paths or [])
             if str(path).strip()
         ]
         self._moved_files = []  # Track moved files for duplicate checking
         self.summary = {
+            "status": STATUS_COMPLETED,
+            "status_label": RESULT_LABELS[STATUS_COMPLETED],
+            "transaction_id": None,
             "folders_moved": 0,
             "files_moved": 0,
             "bytes_reorganized": 0,
             "skipped_duplicates": 0,
+            "skipped_conflicts": 0,
+            "skipped_invalid": 0,
+            "failed": 0,
+            "pending": 0,
+            "total_items": 0,
+            "overwrite_backups": 0,
             "warnings": [],
             "errors": [],
             "duration_seconds": 0.0,
             "created_folders": [],
         }
 
+    # ------------------------------------------------------------------
+    def _resolve_plan(self) -> OrganizationPlan:
+        plan = self.plan
+        if isinstance(plan, OrganizationPlan) and plan.matches(
+            self.source_folder, self.conflict_policy, self.organize_by_date
+        ):
+            return plan
+        return build_organization_plan(
+            self.source_folder,
+            self.folder_movements,
+            self.file_movements,
+            conflict_policy=self.conflict_policy,
+            organize_by_date=self.organize_by_date,
+            check_duplicates=self.check_duplicates,
+            category_folder=self.category_folder,
+        )
+
+    def _final_status(self) -> str:
+        if not self.is_running:
+            return STATUS_CANCELLED
+        if self.summary["errors"]:
+            return STATUS_COMPLETED_WITH_ERRORS
+        return STATUS_COMPLETED
+
+    def _result_message(self, status: str) -> str:
+        moved = self.summary["files_moved"] + self.summary["folders_moved"]
+        if status == STATUS_CANCELLED:
+            return (
+                f"Organización cancelada: {moved} elementos movidos, "
+                f"{self.summary['pending']} sin procesar"
+            )
+        if status == STATUS_COMPLETED_WITH_ERRORS:
+            return (
+                f"Organización completada con errores: {moved} elementos movidos, "
+                f"{self.summary['failed']} fallidos"
+            )
+        return "Organización completada exitosamente"
+
     def run(self):
         """Ejecuta la organización de archivos y carpetas con transacciones"""
+        started_at = datetime.now()
         try:
-            started_at = datetime.now()
+            plan = self._resolve_plan()
+            self.plan = plan
+            self.summary["total_items"] = len(plan.items)
             # 🚀 MEJORA: Iniciar transacción
-            total_items = len(self.folder_movements) + len(self.file_movements)
             self.current_transaction_id = self.transaction_manager.begin_transaction(
-                f"Organización de {total_items} elementos en {self.source_folder}"
+                f"Organización de {len(plan.items)} elementos en {self.source_folder}",
+                source_folder=self.source_folder,
             )
+            self.summary["transaction_id"] = self.current_transaction_id
 
             self.progress_update.emit(
                 "🚀 Iniciando organización con protección de datos..."
             )
 
-            # Crear estructura de carpetas de destino
-            self.create_destination_structure()
+            # Las carpetas de destino se crean al mover (y se registran para
+            # poder borrarlas al deshacer si quedan vacías)
+            self.move_folders(plan)
+            self.move_loose_files(plan)
 
-            # Mover carpetas
-            self.move_folders()
-
-            # Mover archivos sueltos
-            self.move_loose_files()
-
-            # 🚀 MEJORA: Confirmar transacción
-            self.transaction_manager.commit_transaction()
+            status = self._final_status()
+            self.summary["status"] = status
+            self.summary["status_label"] = RESULT_LABELS[status]
             self.summary["duration_seconds"] = (
                 datetime.now() - started_at
             ).total_seconds()
+            self.transaction_manager.end_transaction(status, self._summary_counts())
             self.summary_ready.emit(dict(self.summary))
 
-            self.progress_update.emit("✅ Organización completada exitosamente")
-            self.organize_complete.emit(True, "Organización completada exitosamente")
+            message = self._result_message(status)
+            icon = {"completado": "✅", "cancelado": "⏹️"}.get(status, "⚠️")
+            self.progress_update.emit(f"{icon} {message}")
+            self.organize_complete.emit(status == STATUS_COMPLETED, message)
 
-            # Emitir señal de rollback disponible
-            self.rollback_available.emit(self.current_transaction_id)
+            # Emitir señal de rollback disponible (también tras cancelar o con
+            # errores: permite deshacer lo que sí se movió)
+            if self.summary["files_moved"] or self.summary["folders_moved"]:
+                self.rollback_available.emit(self.current_transaction_id)
 
         except Exception as e:
             error_msg = f"❌ Error durante la organización: {str(e)}"
             self.progress_update.emit(error_msg)
+            log_error(error_msg)
 
             # 🚀 MEJORA: Intentar rollback automático
             if self.current_transaction_id:
@@ -673,234 +762,194 @@ class OrganizeWorker(QThread):
                     error_msg += "\n✅ Cambios revertidos exitosamente"
                 else:
                     error_msg += "\n⚠️ No se pudieron revertir todos los cambios"
+                self.transaction_manager.end_transaction(STATUS_FAILED, self._summary_counts())
 
+            self.summary["status"] = STATUS_FAILED
+            self.summary["status_label"] = RESULT_LABELS[STATUS_FAILED]
             self.summary["errors"].append(error_msg)
+            self.summary["duration_seconds"] = (
+                datetime.now() - started_at
+            ).total_seconds()
             self.summary_ready.emit(dict(self.summary))
             self.organize_complete.emit(False, error_msg)
 
-    def create_destination_structure(self):
-        """Crea la estructura de carpetas de destino solo si no existen"""
-        try:
-            # Crear carpeta VARIOS si no existe
-            varios_path = Path(self.source_folder) / VARIOS_FOLDER
-            if not varios_path.exists():
-                varios_path.mkdir(exist_ok=True)
-                self.progress_update.emit(f"📁 Creada carpeta: {VARIOS_FOLDER}")
+    def _summary_counts(self) -> Dict[str, Any]:
+        return {
+            key: self.summary[key]
+            for key in (
+                "folders_moved",
+                "files_moved",
+                "bytes_reorganized",
+                "skipped_duplicates",
+                "skipped_conflicts",
+                "skipped_invalid",
+                "failed",
+                "pending",
+                "total_items",
+                "overwrite_backups",
+            )
+        }
 
-            # Crear carpetas para cada categoría solo si no existen
-            categories = set()
-            for mov in self.folder_movements:
-                categories.add(mov["category"])
-            for mov in self.file_movements:
-                categories.add(mov["category"])
-                for candidate in self._build_destination_candidates(
-                    mov.get("file"), mov["category"]
-                ):
-                    if candidate != Path(self.source_folder):
-                        try:
-                            categories.add(
-                                str(candidate.relative_to(Path(self.source_folder)))
-                            )
-                        except ValueError:
-                            continue
+    # ------------------------------------------------------------------
+    def _ensure_parent(self, destination: Path):
+        created = self.transaction_manager.ensure_directory(destination.parent)
+        for folder in created:
+            try:
+                relative = str(folder.relative_to(Path(self.source_folder))).replace("\\", "/")
+            except ValueError:
+                relative = str(folder)
+            self.summary["created_folders"].append(relative)
+            self.progress_update.emit(f"📁 Creada carpeta: {relative}")
 
-            created_folders = []
-            existing_folders = []
+    def _skip_common(self, item) -> bool:
+        """Omite elementos protegidos, inválidos o desaparecidos."""
+        if self._is_protected_path(item.source):
+            prefix = "Carpeta protegida omitida" if item.is_folder else "Archivo protegido omitido"
+            warning = f"{prefix}: {item.source}"
+            self.summary["warnings"].append(warning)
+            self.summary["skipped_invalid"] += 1
+            self.progress_update.emit(f"🛡️ {warning}")
+            return True
+        if item.action in (ACTION_INVALID, ACTION_MISSING):
+            warning = f"{item.source.name}: {item.status}"
+            self.summary["warnings"].append(warning)
+            self.summary["skipped_invalid"] += 1
+            self.progress_update.emit(f"⏭️ {warning}")
+            return True
+        return False
 
-            for category in categories:
-                if category != "VARIOS":
-                    category_path = Path(self.source_folder) / category
-                    if not category_path.exists():
-                        category_path.mkdir(exist_ok=True)
-                        created_folders.append(category)
-                    else:
-                        existing_folders.append(category)
+    def move_folders(self, plan: Optional[OrganizationPlan] = None):
+        """Mueve las carpetas a sus ubicaciones de destino (solo os.rename)"""
+        plan = plan or self._resolve_plan()
+        items = plan.folder_items
+        for index, item in enumerate(items):
+            if not self.is_running:
+                self.summary["pending"] += len(items) - index
+                break
+            if self._skip_common(item):
+                continue
 
-            # Informar sobre carpetas creadas y existentes
-            if created_folders:
-                self.summary["created_folders"].extend(created_folders)
-                self.progress_update.emit(
-                    f"📁 Carpetas creadas: {', '.join(created_folders)}"
-                )
-            if existing_folders:
-                self.progress_update.emit(
-                    f"📁 Carpetas existentes (reutilizadas): {', '.join(existing_folders)}"
-                )
+            dest_path = item.destination
+            if os.path.lexists(long_path(dest_path)):
+                # El destino se ocupó después de la vista previa
+                dest_path = find_available_name(dest_path)
 
-            if not created_folders and not existing_folders:
-                self.progress_update.emit("📁 No se requieren nuevas carpetas")
-            elif not created_folders:
-                self.progress_update.emit("📁 Todas las carpetas ya existían")
-            elif not existing_folders:
-                self.progress_update.emit(
-                    "📁 Estructura de carpetas creada completamente"
-                )
+            self._ensure_parent(dest_path)
+            if self.transaction_manager.safe_move_directory(item.source, dest_path):
+                self.summary["folders_moved"] += 1
+                self.summary["bytes_reorganized"] += item.size
+                progress = f"📁 Movida carpeta: {item.source.name} → {item.category}"
+                self.progress_update.emit(progress)
+            else:
+                reason = self.transaction_manager.last_error or "motivo desconocido"
+                error = f"Error moviendo carpeta {item.source.name}: {reason}"
+                self.summary["errors"].append(error)
+                self.summary["failed"] += 1
+                self.progress_update.emit(f"⚠️ {error}")
 
-        except Exception as e:
-            raise Exception(f"Error creando estructura de carpetas: {str(e)}")
-
-    def move_folders(self):
-        """Mueve las carpetas a sus ubicaciones de destino"""
-        try:
-            for i, mov in enumerate(self.folder_movements):
-                if not self.is_running:
-                    break
-
-                folder = mov["folder"]
-                category = mov["category"]
-                if self._is_protected_path(folder):
-                    warning = f"Carpeta protegida omitida: {folder}"
-                    self.summary["warnings"].append(warning)
-                    self.progress_update.emit(f"🛡️ {warning}")
-                    continue
-
-                dest_path = build_base_destination(
-                    self.source_folder,
-                    category,
-                    folder.name,
-                    organize_by_date=False,
-                )
-                resolved = resolve_destination(
-                    dest_path,
-                    conflict_policy=self.conflict_policy,
-                    is_folder=True,
-                )
-                dest_path = resolved.destination
-                if resolved.action == "skip":
-                    warning = f"Carpeta omitida por conflicto: {folder.name}"
-                    self.summary["warnings"].append(warning)
-                    self.progress_update.emit(f"⏭️ {warning}")
-                    continue
-
-                # 🚀 MEJORA: Usar safe_move_file del transaction_manager
-                if self.transaction_manager.safe_move_file(folder, dest_path):
-                    self.summary["folders_moved"] += 1
-                    self.summary["bytes_reorganized"] += mov.get("size", 0)
-                    progress = f"📁 Movida carpeta: {folder.name} → {category}"
-                    self.progress_update.emit(progress)
-                else:
-                    error = f"Error moviendo carpeta: {folder.name}"
-                    self.summary["errors"].append(error)
-                    self.progress_update.emit(f"⚠️ {error}")
-
-        except Exception as e:
-            raise Exception(f"Error moviendo carpetas: {str(e)}")
-
-    def move_loose_files(self):
+    def move_loose_files(self, plan: Optional[OrganizationPlan] = None):
         """Mueve los archivos sueltos a sus carpetas de destino"""
-        try:
-            for i, mov in enumerate(self.file_movements):
-                if not self.is_running:
-                    break
+        plan = plan or self._resolve_plan()
+        items = plan.file_items
+        if not self.is_running:
+            self.summary["pending"] += len(items)
+            return
+        for index, item in enumerate(items):
+            if not self.is_running:
+                self.summary["pending"] += len(items) - index
+                break
+            if self._skip_common(item):
+                continue
+            file = item.source
+            base_destination = item.base_destination
 
-                file = mov["file"]
-                category = mov["category"]
-                if self._is_protected_path(file):
-                    warning = f"Archivo protegido omitido: {file}"
-                    self.summary["warnings"].append(warning)
-                    self.progress_update.emit(f"🛡️ {warning}")
+            # "Comprobar duplicados" funciona con cualquier política: si el
+            # destino original ya contiene un archivo idéntico, se omite.
+            if self.check_duplicates and os.path.lexists(long_path(base_destination)):
+                if self._is_duplicate_file(file, base_destination):
+                    self.summary["skipped_duplicates"] += 1
+                    self.progress_update.emit(
+                        f"⏭️ Duplicado omitido: {file.name} ya existe en {base_destination.parent}"
+                    )
                     continue
 
-                dest_path = self._resolve_file_destination(file, category)
-                resolved = resolve_destination(
-                    dest_path,
-                    conflict_policy=self.conflict_policy,
-                    is_folder=False,
+            # Mover archivo
+            if item.action == ACTION_SKIP:
+                self.summary["skipped_conflicts"] += 1
+                self.progress_update.emit(
+                    f"⏭️ Archivo omitido por conflicto: {file.name}"
                 )
-                dest_path = resolved.destination
+                continue
 
-                # Mover archivo
-                if resolved.action == "skip":
-                    self.summary["skipped_duplicates"] += 1
+            dest_path = item.destination
+            occupied = os.path.lexists(long_path(dest_path))
+            if item.action == ACTION_OVERWRITE and occupied:
+                backup_path = find_available_name(
+                    dest_path.with_name(f".{dest_path.stem}.overwrite{dest_path.suffix}")
+                )
+                if not self.transaction_manager.safe_move_file(
+                    dest_path, backup_path, role=ROLE_OVERWRITE_BACKUP
+                ):
+                    reason = self.transaction_manager.last_error or "motivo desconocido"
+                    error = f"Error preparando sobrescritura de {dest_path.name}: {reason}"
+                    self.summary["errors"].append(error)
+                    self.summary["failed"] += 1
+                    self.progress_update.emit(f"⚠️ {error}")
+                    continue
+                self.summary["overwrite_backups"] += 1
+            elif occupied:
+                # El destino se ocupó después de la vista previa: nunca se
+                # sobrescribe algo que el usuario no aprobó
+                if self.conflict_policy == CONFLICT_POLICY_SKIP:
+                    self.summary["skipped_conflicts"] += 1
                     self.progress_update.emit(
                         f"⏭️ Archivo omitido por conflicto: {file.name}"
                     )
                     continue
+                dest_path = find_available_name(dest_path)
 
-                if dest_path.exists() and resolved.action == "overwrite":
-                    if self.check_duplicates and self._is_duplicate_file(
-                        file, dest_path
-                    ):
-                        self.summary["skipped_duplicates"] += 1
-                        self.progress_update.emit(
-                            f"⏭️ Duplicado omitido: {file.name} ya existe en {dest_path.parent}"
-                        )
-                        continue
-                    backup_path = find_available_name(
-                        dest_path.with_name(f".{dest_path.stem}.overwrite{dest_path.suffix}")
-                    )
-                    if not self.transaction_manager.safe_move_file(dest_path, backup_path):
-                        error = f"Error preparando sobrescritura: {dest_path.name}"
-                        self.summary["errors"].append(error)
-                        self.progress_update.emit(f"⚠️ {error}")
-                        continue
+            # Mostrar información sobre la carpeta de destino
+            dest_folder = dest_path.parent.name
+            if dest_folder == item.category:
+                progress = f"📄 Movido archivo: {file.name} → {item.category}/"
+            else:
+                progress = f"📄 Movido archivo: {file.name} → {dest_folder}/"
 
-                elif dest_path.exists():
-                    dest_path = find_available_name(dest_path)
+            self._ensure_parent(dest_path)
+            # 🚀 MEJORA: Usar safe_move_file del transaction_manager
+            if self.transaction_manager.safe_move_file(file, dest_path):
+                self.summary["files_moved"] += 1
+                self.summary["bytes_reorganized"] += item.size
+                self.progress_update.emit(progress)
+            else:
+                reason = self.transaction_manager.last_error or "motivo desconocido"
+                error = f"Error moviendo archivo {file.name}: {reason}"
+                self.summary["errors"].append(error)
+                self.summary["failed"] += 1
+                self.progress_update.emit(f"⚠️ {error}")
 
-                # Mostrar información sobre la carpeta de destino
-                dest_folder = dest_path.parent.name
-                if dest_folder == category:
-                    progress = f"📄 Movido archivo: {file.name} → {category}/"
-                else:
-                    progress = f"📄 Movido archivo: {file.name} → {dest_folder}/"
-
-                # 🚀 MEJORA: Usar safe_move_file del transaction_manager
-                if self.transaction_manager.safe_move_file(file, dest_path):
-                    self.summary["files_moved"] += 1
-                    self.summary["bytes_reorganized"] += mov.get("size", 0)
-                    self.progress_update.emit(progress)
-                else:
-                    error = f"Error moviendo archivo: {file.name}"
-                    self.summary["errors"].append(error)
-                    self.progress_update.emit(f"⚠️ {error}")
-
-        except Exception as e:
-            raise Exception(f"Error moviendo archivos: {str(e)}")
+        if self.summary["overwrite_backups"]:
+            self.summary["warnings"].append(
+                f"Se conservan {self.summary['overwrite_backups']} copias ocultas "
+                "(.nombre.overwrite.ext) de los archivos sobrescritos para poder deshacer"
+            )
 
     def stop(self):
         """Detiene el worker"""
         self.is_running = False
 
-    def _resolve_file_destination(self, file_path: Path, category: str) -> Path:
-        """Construye el destino final del archivo respetando organización por fecha."""
-        modified = datetime.fromtimestamp(file_path.stat().st_mtime) if self.organize_by_date else None
-        base_dir = build_base_destination(
-            self.source_folder,
-            category,
-            file_path.name,
-            organize_by_date=self.organize_by_date,
-            modified_at=modified.timestamp() if modified else None,
-        ).parent
-        base_dir.mkdir(parents=True, exist_ok=True)
-        return base_dir / file_path.name
-
-    def _build_destination_candidates(
-        self, file_path: Path | None, category: str
-    ) -> List[Path]:
-        """Retorna carpetas potenciales de destino para pre-crear estructura."""
-        if category == "VARIOS":
-            base_dir = Path(self.source_folder) / VARIOS_FOLDER
-        else:
-            base_dir = Path(self.source_folder) / category
-        if not file_path or not self.organize_by_date:
-            return [base_dir]
-        modified = datetime.fromtimestamp(file_path.stat().st_mtime)
-        year_dir = base_dir / str(modified.year)
-        month_dir = year_dir / f"{modified.month:02d}"
-        return [base_dir, year_dir, month_dir]
-
     def _is_duplicate_file(self, source: Path, destination: Path) -> bool:
-        """Verifica si origen y destino son archivos idénticos."""
-        if not destination.exists() or not destination.is_file():
-            return False
+        """Verifica si origen y destino son archivos idénticos (hash bajo demanda)."""
         try:
+            if not destination.is_file():
+                return False
             if source.stat().st_size != destination.stat().st_size:
                 return False
             source_hash = self.hash_manager.calculate_file_hash(source, "md5")
             dest_hash = self.hash_manager.calculate_file_hash(destination, "md5")
             return bool(source_hash and source_hash == dest_hash)
         except Exception as error:
+            log_warn(f"No se pudo verificar duplicado para {source}: {error}")
             self.progress_update.emit(
                 f"⚠️ No se pudo verificar duplicado para {source.name}: {error}"
             )
@@ -908,8 +957,28 @@ class OrganizeWorker(QThread):
 
     def _is_protected_path(self, path: Path) -> bool:
         """Evita mover rutas marcadas como protegidas."""
-        normalized = str(path).lower()
-        return any(
-            normalized == protected or normalized.startswith(f"{protected}{os.sep}")
-            for protected in self.protected_paths
-        )
+        return any(is_inside(path, protected) for protected in self.protected_paths)
+
+
+class RollbackWorker(QThread):
+    """Deshace una transacción fuera del hilo de la interfaz."""
+
+    rollback_finished = pyqtSignal(str, bool, dict)
+
+    def __init__(self, transaction_manager: TransactionManager, transaction_id: str):
+        super().__init__()
+        self.transaction_manager = transaction_manager
+        self.transaction_id = transaction_id
+
+    def run(self):
+        try:
+            ok = self.transaction_manager.rollback_transaction(self.transaction_id)
+            result = dict(self.transaction_manager.last_rollback_result or {})
+        except Exception as exc:
+            log_error(f"Error deshaciendo {self.transaction_id}: {exc}")
+            ok, result = False, {"errors": [str(exc)], "warnings": [], "reverted": 0}
+        self.rollback_finished.emit(self.transaction_id, ok, result)
+
+    def stop(self):
+        """El rollback no se interrumpe a medias; se espera a que termine."""
+        return None
