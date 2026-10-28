@@ -17,12 +17,14 @@ def create_window():
     # Los imports y la construcción síncrona de widgets suceden después de
     # mostrar el splash. Nunca se construyen QWidget en un worker.
     from src.utils.app_config import AppConfig
-    from src.gui.main_window import FileOrganizerGUI
+    from src.gui.organize_controller import OrganizeController
     from src.gui.v2.app_window import FluentAppWindow
 
     config = AppConfig()
-    legacy_window = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
-    return FluentAppWindow(legacy_window)
+    controller = OrganizeController()
+    window = FluentAppWindow(config, controller)
+    controller.setParent(window)
+    return window
 
 
 def start_window(app):

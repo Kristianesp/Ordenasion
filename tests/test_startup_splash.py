@@ -28,7 +28,7 @@ def app():
 
 def test_entrypoint_import_is_lightweight_and_read_only(tmp_path):
     repo = Path(main_fluent.__file__).resolve().parent
-    script = f"import sys;sys.path.insert(0,{str(repo)!r});import main_fluent;assert 'src.gui.main_window' not in sys.modules;assert 'qfluentwidgets' not in sys.modules"
+    script = f"import sys;sys.path.insert(0,{str(repo)!r});import main_fluent;assert 'src.gui.v2.app_window' not in sys.modules;assert 'src.gui.v2.pages.organize_page' not in sys.modules;assert 'qfluentwidgets' not in sys.modules"
     completed = subprocess.run([sys.executable, "-B", "-c", script], cwd=tmp_path, capture_output=True, text=True,
                                env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, timeout=20)
     assert completed.returncode == 0, completed.stderr

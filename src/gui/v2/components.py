@@ -8,6 +8,10 @@ from qfluentwidgets import (
     CaptionLabel,
     CardWidget,
     IconWidget,
+    InfoBar,
+    InfoBarPosition,
+    LineEdit,
+    MessageBox,
     MessageBoxBase,
     PrimaryPushButton,
     PushButton,
@@ -303,6 +307,58 @@ class ShortcutsDialog(MessageBoxBase):
         self.yesButton.setText("Cerrar")
         self.cancelButton.hide()
         self.widget.setMinimumWidth(420)
+
+
+class TextPromptDialog(MessageBoxBase):
+    """Petición de un texto (p. ej. el nombre de un perfil) con estilo Fluent."""
+
+    def __init__(self, title: str, label: str, text: str = "", parent=None):
+        super().__init__(parent)
+        self.setObjectName("textPromptDialog")
+        self.viewLayout.addWidget(SubtitleLabel(title))
+        self.viewLayout.addWidget(BodyLabel(label))
+        self.input = LineEdit()
+        self.input.setText(text)
+        self.input.selectAll()
+        self.input.setClearButtonEnabled(True)
+        self.input.setAccessibleName(label)
+        self.viewLayout.addWidget(self.input)
+        self.yesButton.setText("Guardar")
+        self.cancelButton.setText("Cancelar")
+        self.widget.setMinimumWidth(380)
+        self.input.setFocus()
+
+    def validate(self) -> bool:
+        return bool(self.input.text().strip())
+
+    @classmethod
+    def get_text(cls, parent, title: str, label: str, text: str = "") -> tuple[str, bool]:
+        dialog = cls(title, label, text, parent)
+        accepted = bool(dialog.exec())
+        return dialog.input.text().strip(), accepted
+
+
+def ask(parent, title: str, content: str, yes_text: str = "Sí", no_text: str = "No") -> bool:
+    """Pregunta Fluent bloqueante; True si se confirma."""
+    box = MessageBox(title, content, parent)
+    box.yesButton.setText(yes_text)
+    box.cancelButton.setText(no_text)
+    return bool(box.exec())
+
+
+def alert(parent, title: str, content: str) -> None:
+    """Aviso Fluent bloqueante, para errores que no deben pasar inadvertidos."""
+    box = MessageBox(title, content, parent)
+    box.yesButton.setText("Aceptar")
+    box.cancelButton.hide()
+    box.exec()
+
+
+def notify(parent, level: str, title: str, content: str) -> None:
+    """Aviso no bloqueante (InfoBar) en la esquina superior derecha."""
+    show = getattr(InfoBar, level, InfoBar.info)
+    show(title, content, position=InfoBarPosition.TOP_RIGHT, parent=parent,
+         duration=6000 if level in ("warning", "error") else 3500)
 
 
 def local_folder_from_mime(mime) -> str | None:

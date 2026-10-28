@@ -13,16 +13,14 @@ from src.utils.app_config import AppConfig
 
 @pytest.fixture(scope="module")
 def shell_window(tmp_path_factory):
-    from src.gui.main_window import FileOrganizerGUI
     from src.gui.v2.app_window import FluentAppWindow
 
     app = QApplication.instance() or QApplication([])
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(FileOrganizerGUI, "_init_disk_manager", lambda self: None)
+        patch.setattr(FluentAppWindow, "_init_disk_manager", lambda self: None)
         config = AppConfig(str(tmp_path_factory.mktemp("theme-config") / "config.json"))
         config.set_theme_mode("light")
-        legacy = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
-        window = FluentAppWindow(legacy)
+        window = FluentAppWindow(config)
         window.resize(1280, 800)
         window.show()
         app.processEvents()
@@ -164,9 +162,12 @@ def test_legacy_font_apply_refreshes_fluent_without_rewriting_theme(shell, monke
     shell.config.set_theme_mode("dark")
     shell._refresh_theme()
     refresh = MagicMock(wraps=shell._refresh_theme)
-    monkeypatch.setattr(shell.legacy_window, "refresh_fluent_appearance", refresh)
-    monkeypatch.setattr(module.QMessageBox, "exec", lambda self: 0)
-    dialog = module.ConfigDialog(shell.legacy_window, shell.legacy_window.category_manager,
+    monkeypatch.setattr(shell, "refresh_fluent_appearance", refresh)
+    # El aviso de «Cambios aplicados» es un InfoBar (no bloquea)
+    info = MagicMock()
+    monkeypatch.setattr(module.InfoBar, "success", info)
+    # El diálogo se abre desde la página Organizar: el gancho está en la ventana
+    dialog = module.ConfigDialog(shell.organize_page, shell.category_manager,
                                  app_config_ref=shell.config)
     legacy_apply = MagicMock()
     dialog.interface_changes_requested.connect(legacy_apply)
@@ -180,4 +181,6 @@ def test_legacy_font_apply_refreshes_fluent_without_rewriting_theme(shell, monke
     assert shell.config.get_font_size() == 15
     assert shell.config.get_theme_mode() == "dark"
     assert "Tema oscuro" in shell.theme_button.accessibleName()
+    info.assert_called_once()
+    assert info.call_args.args[0] == "Cambios aplicados"
     dialog.close()

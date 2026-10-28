@@ -40,6 +40,14 @@ def test_release_version_and_spec_use_fluent_assets_without_private_data():
     args, options = calls["analysis"]
     assert args[0] == [str(ROOT / "main_fluent.py")]
     assert "PyQt6.QtMultimedia" in options["hiddenimports"]
+    # Módulos de interfaz importados bajo demanda; la ventana heredada ya no existe
+    assert {"src.gui.v2.pages.organize_page", "src.gui.config_dialog",
+            "src.gui.disk_viewer"} <= set(options["hiddenimports"])
+    assert not any("main_window" in name for name in options["hiddenimports"])
+    for module in options["hiddenimports"]:
+        if module.startswith("src."):
+            relative = Path(*module.split("."))
+            assert (ROOT / relative).with_suffix(".py").is_file() or (ROOT / relative).is_dir(), module
     assert calls["exe"]["name"] == EXECUTABLE_NAME and not calls["exe"]["console"]
     assert "collect_all(" not in spec
     packaged_binaries = {Path(entry[0]).name.lower() for entry in calls["exe_args"][2]}

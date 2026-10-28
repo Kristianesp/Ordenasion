@@ -87,6 +87,8 @@ class FilterBar(QWidget):
         layout.addWidget(self.controls_separator)
         layout.addStretch()
         layout = QHBoxLayout()
+        layout.setSpacing(8)
+        self._search_layout = layout
         outer.addLayout(layout)
 
         self.search_input = LineEdit()
@@ -169,8 +171,22 @@ class FilterBar(QWidget):
         self.count_label.setText(f"{count} {'visible' if count == 1 else 'visibles'}")
         self.count_label.setVisible(self.has_active_filter())
 
-    def embed_selection_bar(self):
-        """Activa los controles compactos de selección dentro de la barra."""
+    def embed_selection_bar(self, inline: bool = False):
+        """Activa los controles compactos de selección dentro de la barra.
+
+        Con ``inline`` van en la misma fila que la búsqueda (una sola fila).
+        """
+        if inline:
+            for index, widget in enumerate((self.select_all_btn, self.deselect_all_btn, self.selection_count_label)):
+                self._search_layout.insertWidget(index, widget)
+                widget.setVisible(True)
+            self.selection_count_label.setMinimumWidth(0)
+            self.selection_count_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            self._search_layout.insertSpacing(3, 8)
+            self.selection_row.hide()
+            self.total_size_label.setVisible(False)
+            self.total_files_label.setVisible(False)
+            return
         self.selection_row.show()
         for widget in (
             self.select_all_btn,

@@ -406,7 +406,7 @@ for item in pyqt6_datas:
 ### Archivos de Código Críticos
 - `src/core/application_state.py` - Estado de la aplicación (QObject interno)
 - `src/utils/smartctl_wrapper.py` - Wrapper para smartctl
-- `src/gui/main_window.py` - Vista de Organizar y fábrica de herramientas
+- `src/gui/v2/pages/organize_page.py` - Página Organizar (Fluent nativa)
 - `src/gui/organize_controller.py` - Estado y workers de Organizar
 - `src/gui/v2/app_window.py` - Ventana Fluent
 

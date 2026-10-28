@@ -98,6 +98,28 @@ class OrganizeController(QObject):
         return (bool(self.last_transaction_id) and not self.current_organize_task_id
                 and not self.current_rollback_task_id and not summary.get("undone"))
 
+    @property
+    def active_task_id(self) -> Optional[str]:
+        """Tarea en curso (análisis, organización o deshacer), si la hay."""
+        return (self.current_analysis_task_id or self.current_organize_task_id
+                or self.current_rollback_task_id)
+
+    def can_cancel(self) -> bool:
+        """El análisis y la organización se pueden detener; el deshacer no."""
+        task_id = self.current_analysis_task_id or self.current_organize_task_id
+        task = task_registry.get_task(task_id) if task_id else None
+        return bool(task and task["status"] == "En progreso" and callable(task.get("cancel_callback")))
+
+    def cancel_active(self) -> bool:
+        """Pide detener el análisis o la organización en curso (de forma segura)."""
+        if not self.can_cancel():
+            return False
+        task_id = self.current_analysis_task_id or self.current_organize_task_id
+        task_registry.cancel_task(task_id)
+        self.log("⏹️ Cancelación solicitada")
+        self.operation_state_changed.emit()
+        return True
+
     def get_transaction_history(self, limit: int = 50):
         """Historial persistente de organizaciones (la más reciente primero)."""
         return self.transaction_manager.get_transactions(limit)
@@ -209,6 +231,7 @@ class OrganizeController(QObject):
         worker.error_occurred.connect(self._on_analysis_error)
         task_registry.start_task(worker_id, "Análisis de organización", worker.stop)
         self.current_analysis_task_id = worker_id
+        self.operation_state_changed.emit()
         worker.start()
         self.log(f"✅ Worker de análisis iniciado: {worker_id}")
         return worker_id
@@ -217,6 +240,7 @@ class OrganizeController(QObject):
         if self.current_analysis_task_id:
             task_registry.finish_task(self.current_analysis_task_id, status)
             self.current_analysis_task_id = None
+            self.operation_state_changed.emit()
 
     def _on_analysis_complete(self, folder_movements, file_movements, stats) -> None:
         self._finish_analysis("Completada")

@@ -10,18 +10,28 @@ from PyQt6.QtWidgets import QApplication
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
+from src.utils.formatting import format_bytes
+
 
 class VirtualizedMovementsModel(QAbstractTableModel):
     """
-    Modelo virtualizado para la tabla de movimientos en main_window.py
-    Solo renderiza las filas visibles, manejando eficientemente 10,000+ elementos
+    Modelo virtualizado de la tabla de resultados de la página Organizar.
+    Solo renderiza las filas visibles, manejando eficientemente 10,000+ elementos.
+
+    Columnas: casilla, elemento, destino, %, archivos y tamaño. Las filas de
+    tipo ``file_group`` agrupan archivos sueltos y se pueden expandir.
     """
+
+    # Columnas ordenables y la clave de fila por la que se ordenan
+    SORT_KEYS = {1: "element", 2: "category", 3: "percentage", 4: "file_count", 5: "size_bytes"}
     
     def __init__(self, data: List[Dict[str, Any]] = None, parent=None):
         super().__init__(parent)
         self._data = data if data else []
         self._headers = ["", "Elemento", "Destino", "%", "Archivos", "Tamaño"]
         self._checked_ids = set()  # Mantener estado de checkboxes con IDs estables
+        self._sort_column = -1
+        self._sort_order = Qt.SortOrder.AscendingOrder
         # Mapeo de extensiones a iconos
         self._icon_cache: Dict[str, QIcon] = {}
         self._ext_icons = {
@@ -61,15 +71,9 @@ class VirtualizedMovementsModel(QAbstractTableModel):
         col = index.column()
         item_data = self._data[row]
         
-        # Rol de icono (para columna Elemento)
+        # Rol de icono (para columna Elemento): FluentIcon según el tipo
         if role == Qt.ItemDataRole.DecorationRole and col == 1:
-            element = item_data.get('element', '')
-            # Extraer extension del nombre si existe
-            ext = self._get_extension(element)
-            if ext:
-                emoji = self._ext_icons.get(ext.lower(), '📄')
-                return QIcon()  # PyQt6 no soporta emoji directo, retornamos vacio
-            return None
+            return self._row_icon(item_data.get('type', ''))
         
         # Rol de display (texto que se muestra)
         if role == Qt.ItemDataRole.DisplayRole:
@@ -165,6 +169,9 @@ class VirtualizedMovementsModel(QAbstractTableModel):
         self._search_filter = ""
         self._category_filter = ""
         self.endResetModel()
+        if self._sort_column in self.SORT_KEYS:
+            # Un análisis nuevo conserva el orden elegido por el usuario
+            self.sort(self._sort_column, self._sort_order)
 
     def _build_row_id(self, item: Dict[str, Any], index: int) -> str:
         row_type = item.get('type', 'row')
@@ -212,12 +219,12 @@ class VirtualizedMovementsModel(QAbstractTableModel):
         for fm in files:
             items.append({
                 'type': 'file_item',
-                'element': f"  📄 {fm['file'].name}",
+                'element': f"    {fm['file'].name}",
                 'category': group.get('category', ''),
                 'percentage': 0,
                 'file_count': 1,
                 'size_bytes': fm.get('size', 0),
-                'size_formatted': f"{fm.get('size', 0)} B",  # Formateo externo si se requiere
+                'size_formatted': format_bytes(fm.get('size', 0)),
                 'tooltip': str(fm['file']),
                 'is_group': False,
                 'is_expanded': False,
@@ -341,6 +348,47 @@ class VirtualizedMovementsModel(QAbstractTableModel):
         """Retorna numero de filas visibles despues de filtrar"""
         return len(self._data)
     
+    def _row_icon(self, row_type: str) -> Optional[QIcon]:
+        """Icono Fluent del tipo de fila, cacheado por tema (claro/oscuro)."""
+        from qfluentwidgets import FluentIcon, isDarkTheme
+
+        icon_kind = {"folder": FluentIcon.FOLDER, "file_group": FluentIcon.DOCUMENT,
+                     "file_item": FluentIcon.DOCUMENT}.get(row_type)
+        if icon_kind is None:
+            return None
+        key = f"{row_type}:{isDarkTheme()}"
+        icon = self._icon_cache.get(key)
+        if icon is None:
+            icon = self._icon_cache[key] = icon_kind.icon()
+        return icon
+
+    # ===== ORDENACIÓN =====
+
+    def get_sort_info(self) -> Dict[str, Any]:
+        return {"column": self._sort_column, "order": self._sort_order}
+
+    def sort(self, column: int, order: Qt.SortOrder = Qt.SortOrder.AscendingOrder) -> None:
+        """Ordena las filas de primer nivel; los grupos se contraen antes."""
+        key_name = self.SORT_KEYS.get(column)
+        if key_name is None:
+            return
+        self._sort_column, self._sort_order = column, order
+        reverse = order == Qt.SortOrder.DescendingOrder
+
+        def sort_key(item):
+            value = item.get(key_name, 0)
+            return value.lower().strip() if isinstance(value, str) else value
+
+        def ordered(rows):
+            top_level = [dict(row, is_expanded=False) for row in rows if not row.get('is_child', False)]
+            return sorted(top_level, key=sort_key, reverse=reverse)
+
+        self.beginResetModel()
+        self._data = ordered(self._data)
+        if hasattr(self, '_full_data'):
+            self._full_data = ordered(self._full_data)
+        self.endResetModel()
+
     def _get_extension(self, filename: str) -> str:
         """Extrae la extension de un nombre de archivo"""
         if '.' in filename:
