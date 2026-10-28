@@ -215,3 +215,11 @@ HEALTH_LABELS = {
     "warning": "ADVERTENCIA",
     "critical": "CRÍTICO",
 }
+
+# Métodos de búsqueda de duplicados (clave, etiqueta visible)
+DUPLICATE_METHODS = [
+    ("fast", "Rápido (candidatos)"),
+    ("hybrid", "Híbrido (confirmado por hash)"),
+    ("deep", "Profundo (por contenido)"),
+    ("similar", "Imágenes parecidas"),
+]

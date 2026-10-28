@@ -51,16 +51,12 @@ from src.gui.modern_components import TabHeaderWidget
 from src.gui.table_models import PaginatedDuplicatesModel
 from src.gui.task_center import TaskCenterDialog, task_registry
 from src.gui.v2.theme import ElidedPathLabel, apply_control_sizes, apply_menu_surface, typography_scale
+from src.utils.constants import DUPLICATE_METHODS
 from src.utils.app_config import AppConfig
 from src.utils.logger import debug
 from src.utils.paths import user_data_file
 
-METHODS = [
-    ("fast", "Rápido (candidatos)"),
-    ("hybrid", "Híbrido (confirmado por hash)"),
-    ("deep", "Profundo (por contenido)"),
-    ("similar", "Imágenes parecidas"),
-]
+METHODS = DUPLICATE_METHODS
 METHOD_INFO = {
     "fast": "Candidatos por tamaño + nombre + extensión. Se confirman por hash antes de retirar.",
     "hybrid": "Filtro rápido + confirmación por hash de contenido (recomendado).",
