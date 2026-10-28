@@ -1,7 +1,8 @@
 name: Release Windows
 
-# Compila el ejecutable en Windows, lo verifica con el smoke aislado y, sólo
-# al empujar una etiqueta vX.Y.Z, lo publica como pre-release de GitHub.
+# Compila el ejecutable en Windows, lo verifica con el smoke aislado y lo
+# publica como pre-release de GitHub al empujar una etiqueta vX.Y.Z o al
+# lanzarlo a mano con «publicar» (crea la etiqueta v<APP_VERSION> en el commit).
 on:
   push:
     tags: ["v*"]
@@ -12,6 +13,11 @@ on:
       - "requirements*.txt"
       - "packaging/**"
   workflow_dispatch:
+    inputs:
+      publicar:
+        description: "Publicar la pre-release v<APP_VERSION> (crea la etiqueta)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -24,6 +30,7 @@ jobs:
         shell: pwsh
     env:
       PYTHONUTF8: "1"
+      PUBLISH: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publicar) }}
     steps:
       - uses: actions/checkout@v5
 
@@ -100,13 +107,16 @@ jobs:
           retention-days: 30
 
       - name: Publicar pre-release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
+          $version = python -c "from src.utils.version import APP_VERSION; print(APP_VERSION)"
+          $tag = "v$version"
           python tools/release_notes.py $version --out release-notes.md `
             --exe "${{ steps.hash.outputs.name }}" --mb "${{ steps.hash.outputs.mb }}" --sha "${{ steps.hash.outputs.sha }}"
           if ($LASTEXITCODE -ne 0) { throw "No se pudieron generar las notas" }
-          gh release create "${{ github.ref_name }}" "${{ steps.hash.outputs.exe }}" "${{ steps.hash.outputs.exe }}.sha256" `
-            --title "Ordenasion $version" --notes-file release-notes.md --prerelease --verify-tag
+          # Con una etiqueta ya empujada se usa tal cual; a mano, se crea en este commit
+          gh release create $tag "${{ steps.hash.outputs.exe }}" "${{ steps.hash.outputs.exe }}.sha256" `
+            --title "Ordenasion $version" --notes-file release-notes.md --prerelease --target "${{ github.sha }}"
+          if ($LASTEXITCODE -ne 0) { throw "No se pudo publicar la release $tag" }
