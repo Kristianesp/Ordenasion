@@ -139,13 +139,12 @@ datos (identificación rápida de métricas), nunca como iconografía de UI.
 
 ## 9. Migración de paletas huérfanas
 
-Estas paletas quedan **deprecadas** y deben consumir tokens:
-
-- `src/gui/modern_components.py` (`COLORS` Material)
-- `src/gui/duplicates_dashboard.py` (`_get_theme_colors` Tailwind)
-- `src/gui/notification_manager.py` (`_get_type_colors`)
-- `src/gui/splash_screen.py` (gradiente)
-- `src/gui/music_duplicates_presenters.py` (badges)
+Completada en 3.6: un único sistema de tokens (`src/gui/v2/theme_tokens.py`).
+Se retiraron `themes.py`, `theme_cache.py`, `fast_theme_applier.py`,
+`modern_styles.py`, `notification_manager.py`, `splash_screen.py` y los
+componentes `Modern*` de `modern_components.py`. El diálogo de configuración y
+el visor de Discos usan los tokens V2. Queda algún color suelto en
+`src/gui/duplicates_dashboard.py` (registro interno del panel).
 
 ## 10. Ocean Frost: composición Qt
 
