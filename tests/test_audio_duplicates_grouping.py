@@ -104,3 +104,13 @@ def test_scan_folder_cancellation(tmp_path):
     (tmp_path / "a.mp3").write_bytes(b"1")
     with pytest.raises(ScanCancelled):
         _finder(tmp_path).scan_folder(str(tmp_path), cancel_event=event)
+
+
+def test_list_tracks_without_silent_limit(tmp_path):
+    service = AudioMetadataService(str(tmp_path / "media.db"))
+    service.upsert_many(
+        AudioMetadata(file_path=str(tmp_path / f"{i}.mp3"), file_size=1, mtime=1.0, extension=".mp3")
+        for i in range(1205)
+    )
+    assert len(service.list_tracks(limit=None)) == 1205
+    assert len(service.list_tracks(limit=10)) == 10

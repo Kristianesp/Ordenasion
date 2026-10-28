@@ -22,7 +22,6 @@ from PyQt6.QtWidgets import (
     QSlider,
     QSplitter,
     QTableWidget,
-    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -30,6 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.gui.music_duplicates_constants import DUPLICATES_COLUMN_LABELS
+from src.gui.music_library_table import LibraryTableView
 from src.gui.v2.theme import apply_control_size
 
 
@@ -229,9 +229,15 @@ def build_metadata_tab(view: Any) -> QWidget:
     view.edit_meta_btn.clicked.connect(lambda: view.tabs.setCurrentWidget(view.metadata_panel))
     library_top.addWidget(view.edit_meta_btn)
     library_top.addStretch()
+    view.library_count_label = QLabel("")
+    view.library_count_label.setToolTip("Pistas mostradas / pistas indexadas")
+    library_top.addWidget(view.library_count_label)
     library_layout.addLayout(library_top)
-    view.library_table = QTableWidget(0, len(view.LIBRARY_COLUMN_LABELS))
-    view.library_table.setHorizontalHeaderLabels(view.LIBRARY_COLUMN_LABELS)
+    view.library_table = LibraryTableView(
+        list(view.LIBRARY_COLUMN_LABELS),
+        select_column=view.LIBRARY_SELECT_COLUMN,
+        file_column=view.LIBRARY_FILE_COLUMN,
+    )
     view.library_table.setSortingEnabled(True)
     view.library_table.setSelectionBehavior(
         view.library_table.SelectionBehavior.SelectRows

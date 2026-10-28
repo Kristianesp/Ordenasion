@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from PyQt6.QtCore import Qt, QItemSelectionModel
-from PyQt6.QtGui import QColor, QBrush
-from PyQt6.QtWidgets import QTableWidgetItem
 
 from src.core.audio_index import audio_metadata_service
 from src.gui.music_duplicates_table_builders import (
@@ -96,92 +94,76 @@ def restore_selected_file_paths(
 
 
 def refresh_library(view: Any) -> None:
-    tracks = audio_metadata_service.list_tracks(limit=1000)
+    """Recarga la biblioteca completa (sin límite) en el modelo de la tabla."""
+    tracks = audio_metadata_service.list_tracks(limit=None)
     view.library_all_rows = tracks
     available_paths = {str(track.get("file_path") or "") for track in tracks}
     view._checked_library_paths.intersection_update(available_paths)
     filtered_tracks: list[Dict[str, Any]] = []
+    rows: list[Dict[str, Any]] = []
     for track in tracks:
         file_path = str(track.get("file_path", ""))
         lookup = view._get_lookup_result(file_path, track)
         state_label = view._track_state_label(track, lookup)
-        if view._match_library_filter(track, lookup, state_label):
-            track_copy = dict(track)
-            track_copy["ui_state_label"] = state_label
-            filtered_tracks.append(track_copy)
+        if not view._match_library_filter(track, lookup, state_label):
+            continue
+        track_copy = dict(track)
+        track_copy["ui_state_label"] = state_label
+        filtered_tracks.append(track_copy)
+        diagnostics = lookup.get("diagnostics", {})
+        diagnostic_reason = lookup.get("reason", "")
+        acoustid_reason = diagnostics.get("acoustid_reason", "")
+        if diagnostic_reason in ("", "ok", "no_candidates") and acoustid_reason not in (
+            "",
+            "ok",
+            "no_candidates",
+            "not_used",
+        ):
+            diagnostic_reason = acoustid_reason
+        values = build_library_row_values(
+            file_path,
+            track,
+            lookup,
+            state_label=state_label,
+            quality_text=view._format_quality(track),
+            duration_text=view._format_duration(track.get("duration")),
+            lookup_reason_text=view._format_lookup_reason(diagnostic_reason),
+        )
+        review_status = str(track.get("review_status") or "")
+        is_applied_variant = view._lookup_result_is_applied(lookup) or (
+            review_status == "applied"
+        )
+        has_selected_variant = (
+            view._lookup_selected_candidate_index(lookup) is not None
+            and bool(lookup.get("suggested_updates"))
+            and review_status not in {"complete", "no_match", "applied"}
+            and not is_applied_variant
+        )
+        _, row_color = library_row_colors(
+            review_status,
+            is_applied_variant=is_applied_variant,
+            has_selected_variant=has_selected_variant,
+        )
+        rows.append(
+            {
+                "file_path": file_path,
+                "values": [str(value) for value in values],
+                "color": row_color,
+                "checked": file_path in view._checked_library_paths,
+            }
+        )
     view.library_rows = filtered_tracks
     view._refreshing_library_table = True
-    view.library_table.setRowCount(0)
-    view.library_table.setSortingEnabled(False)
     try:
-        for track in filtered_tracks:
-            file_path = str(track.get("file_path", ""))
-            lookup = view._get_lookup_result(file_path, track)
-            diagnostics = lookup.get("diagnostics", {})
-            diagnostic_reason = lookup.get("reason", "")
-            acoustid_reason = diagnostics.get("acoustid_reason", "")
-            if diagnostic_reason in (
-                "",
-                "ok",
-                "no_candidates",
-            ) and acoustid_reason not in (
-                "",
-                "ok",
-                "no_candidates",
-                "not_used",
-            ):
-                diagnostic_reason = acoustid_reason
-            row = view.library_table.rowCount()
-            view.library_table.insertRow(row)
-            values = build_library_row_values(
-                file_path,
-                track,
-                lookup,
-                state_label=track.get("ui_state_label")
-                or view._track_state_label(track, lookup),
-                quality_text=view._format_quality(track),
-                duration_text=view._format_duration(track.get("duration")),
-                lookup_reason_text=view._format_lookup_reason(diagnostic_reason),
-            )
-            review_status = str(track.get("review_status") or "")
-            is_applied_variant = view._lookup_result_is_applied(lookup) or (
-                review_status == "applied"
-            )
-            has_selected_variant = (
-                view._lookup_selected_candidate_index(lookup) is not None
-                and bool(lookup.get("suggested_updates"))
-                and review_status not in {"complete", "no_match", "applied"}
-                and not is_applied_variant
-            )
-            _, row_color = library_row_colors(
-                review_status,
-                is_applied_variant=is_applied_variant,
-                has_selected_variant=has_selected_variant,
-            )
-            check_item = QTableWidgetItem("")
-            check_item.setData(Qt.ItemDataRole.UserRole, file_path)
-            check_item.setFlags(
-                Qt.ItemFlag.ItemIsEnabled
-                | Qt.ItemFlag.ItemIsSelectable
-                | Qt.ItemFlag.ItemIsUserCheckable
-            )
-            check_item.setCheckState(
-                Qt.CheckState.Checked
-                if file_path in view._checked_library_paths
-                else Qt.CheckState.Unchecked
-            )
-            if row_color:
-                check_item.setBackground(QBrush(QColor(row_color)))
-            view.library_table.setItem(row, view.LIBRARY_SELECT_COLUMN, check_item)
-            for offset, value in enumerate(values, start=1):
-                cell = QTableWidgetItem(str(value))
-                if offset == view.LIBRARY_FILE_COLUMN:
-                    cell.setData(Qt.ItemDataRole.UserRole, file_path)
-                if row_color:
-                    cell.setBackground(QBrush(QColor(row_color)))
-                view.library_table.setItem(row, offset, cell)
+        view.library_table.set_rows(rows)
     finally:
         view._refreshing_library_table = False
-    view.library_table.setSortingEnabled(True)
+    count_label = getattr(view, "library_count_label", None)
+    if count_label is not None:
+        total = len(tracks)
+        shown = len(rows)
+        count_label.setText(
+            f"{shown} de {total} pistas" if shown != total else f"{total} pistas"
+        )
     view._restore_column_widths()
     view._update_library_detail_panel()
