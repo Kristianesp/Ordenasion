@@ -694,16 +694,6 @@ class FileOrganizerGUI(QMainWindow):
             except Exception as e:
                 self.log_message(f"⚠️ Error conectando disk_selected: {e}")
 
-            # Conectar señales del gestor de workers (temporalmente comentado)
-            # worker_manager.worker_started.connect(self.on_worker_started)
-            # worker_manager.worker_completed.connect(self.on_worker_completed)
-            # worker_manager.worker_progress.connect(self.on_worker_progress)
-            # worker_manager.worker_error.connect(self.on_worker_error)
-
-            # Conectar señales del gestor de memoria (temporalmente comentado)
-            # memory_manager.memory_warning.connect(self.on_memory_warning)
-            # memory_manager.cleanup_completed.connect(self.on_memory_cleanup)
-
             self.log_message("✅ Observadores del estado centralizado configurados")
 
         except Exception as e:
@@ -751,91 +741,6 @@ class FileOrganizerGUI(QMainWindow):
             # La lógica de selección de disco ya está implementada
         except Exception as e:
             self.log_message(f"❌ Error manejando selección de disco: {e}")
-
-    def on_worker_started(self, worker_id: str, worker_type: str):
-        """Maneja inicio de workers"""
-        try:
-            self.log_message(f"🚀 Worker iniciado: {worker_type} ({worker_id})")
-
-            # Actualizar UI según el tipo de worker
-            if "Analysis" in worker_type:
-                self.analyze_btn.setEnabled(False)
-                self.progress_bar.setVisible(True)
-                self.progress_bar.setRange(0, 0)
-            elif "Organize" in worker_type:
-                self.organize_btn.setEnabled(False)
-                self.organize_btn.setText("Organizando...")
-
-        except Exception as e:
-            self.log_message(f"❌ Error manejando inicio de worker: {e}")
-
-    def on_worker_completed(self, worker_id: str, success: bool):
-        """Maneja completación de workers"""
-        try:
-            status = "✅ exitoso" if success else "❌ con errores"
-            self.log_message(f"🏁 Worker completado: {worker_id} - {status}")
-
-            # Restaurar UI
-            self.analyze_btn.setEnabled(True)
-            self.organize_btn.setEnabled(True)
-            self.organize_btn.setText("Revisar y organizar")
-            self.progress_bar.setVisible(False)
-
-        except Exception as e:
-            self.log_message(f"❌ Error manejando completación de worker: {e}")
-
-    def on_worker_progress(self, worker_id: str, progress: float):
-        """Maneja progreso de workers"""
-        try:
-            # Actualizar barra de progreso si es visible
-            if self.progress_bar.isVisible():
-                self.progress_bar.setRange(0, 100)
-                self.progress_bar.setValue(int(progress * 100))
-
-        except Exception as e:
-            self.log_message(f"❌ Error manejando progreso de worker: {e}")
-
-    def on_worker_error(self, worker_id: str, error_message: str):
-        """Maneja errores de workers"""
-        try:
-            self.log_message(f"❌ Error en worker {worker_id}: {error_message}")
-
-            # Restaurar UI en caso de error
-            self.analyze_btn.setEnabled(True)
-            self.organize_btn.setEnabled(True)
-            self.organize_btn.setText("Revisar y organizar")
-            self.progress_bar.setVisible(False)
-
-        except Exception as e:
-            self.log_message(f"❌ Error manejando error de worker: {e}")
-
-    def on_memory_warning(self, warning_type: str, memory_mb: float):
-        """Maneja advertencias de memoria"""
-        try:
-            self.log_message(
-                f"⚠️ Advertencia de memoria: {warning_type} ({memory_mb:.1f} MB)"
-            )
-
-            # Mostrar advertencia al usuario si es crítica
-            if memory_mb > 500:  # Más de 500MB
-                QMessageBox.warning(
-                    self,
-                    "Advertencia de Memoria",
-                    f"El uso de memoria es alto: {memory_mb:.1f} MB\n\n"
-                    "Se recomienda cerrar otras aplicaciones o reiniciar el programa.",
-                )
-
-        except Exception as e:
-            self.log_message(f"❌ Error manejando advertencia de memoria: {e}")
-
-    def on_memory_cleanup(self, stats):
-        """Maneja limpieza de memoria completada"""
-        try:
-            self.log_message(
-                f"🧹 Limpieza de memoria completada: {stats.cache_size_mb:.1f} MB caché, {stats.active_workers} workers"
-            )
-        except Exception as e:
-            self.log_message(f"❌ Error manejando limpieza de memoria: {e}")
 
     def setup_shortcuts(self):
         """🚀 MEJORA: Configura los atajos de teclado para operaciones comunes"""
