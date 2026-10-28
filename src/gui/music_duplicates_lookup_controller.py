@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QMessageBox
 
 from src.core.audio_fingerprint import audio_fingerprint_service
 from src.gui.music_duplicates_workers import AudioLookupWorker
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 
 
 def start_lookup_for_tracks(
@@ -28,7 +28,7 @@ def start_lookup_for_tracks(
             "Ya hay una búsqueda online en curso",
         )
         return
-    if not AppConfig().get_audio_online_metadata_enabled():
+    if not get_app_config().get_audio_online_metadata_enabled():
         QMessageBox.information(
             view,
             "Metadatos",

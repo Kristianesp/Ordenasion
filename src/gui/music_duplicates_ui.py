@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -150,8 +149,14 @@ def build_duplicates_tab(view: Any) -> QWidget:
 def build_metadata_tab(view: Any) -> QWidget:
     meta_tab = QWidget()
     meta_layout = QVBoxLayout(meta_tab)
-    meta_box = QGroupBox("Enriquecimiento de metadatos")
+    # Sin QGroupBox: la página ya es una tarjeta (no anidar cajas con título flotante)
+    meta_box = QWidget()
+    meta_box.setObjectName("musicMetadataPanel")
     meta_box_layout = QVBoxLayout(meta_box)
+    meta_box_layout.setContentsMargins(0, 8, 0, 0)
+    meta_title = QLabel("Enriquecimiento de metadatos")
+    meta_title.setObjectName("musicSectionTitle")
+    meta_box_layout.addWidget(meta_title)
     meta_top = QHBoxLayout()
     view.refresh_missing_btn = QPushButton("Buscar faltantes")
     view.refresh_missing_btn.clicked.connect(view.refresh_missing_metadata)
@@ -196,8 +201,10 @@ def build_metadata_tab(view: Any) -> QWidget:
     metadata_layout.addWidget(meta_box)
     metadata_layout.addStretch()
 
-    library_box = QGroupBox("Biblioteca musical")
+    library_box = QWidget()
+    library_box.setObjectName("musicLibraryPanel")
     library_layout = QVBoxLayout(library_box)
+    library_layout.setContentsMargins(0, 8, 0, 0)
     library_top = QHBoxLayout()
     library_top.addWidget(QLabel("Estado"))
     view.library_filter_combo = QComboBox()
@@ -275,8 +282,6 @@ def build_metadata_tab(view: Any) -> QWidget:
     view.library_splitter = QSplitter(Qt.Orientation.Horizontal)
     view.library_splitter.setHandleWidth(12)
     view.library_splitter.setChildrenCollapsible(False)
-    view.library_splitter.setCollapsible(0, False)
-    view.library_splitter.setCollapsible(1, False)
     view.library_splitter.addWidget(view.library_table)
     view.library_table.setMinimumWidth(360)
     view.library_table.setSizePolicy(
@@ -433,6 +438,18 @@ def build_metadata_tab(view: Any) -> QWidget:
     view.library_splitter.splitterMoved.connect(view._save_library_splitter_sizes)
     view._restore_library_splitter_sizes()
     library_layout.addWidget(view.library_splitter, 1)
+    from qfluentwidgets import FluentIcon
+    from src.gui.v2.components import EmptyState
+
+    view.library_empty_state = EmptyState(
+        FluentIcon.MUSIC,
+        "Tu biblioteca está vacía. Elige una carpeta de música y pulsa «Analizar audio».",
+        "Elegir carpeta",
+        primary=False,
+    )
+    view.library_empty_state.action_requested.connect(view._browse)
+    view.library_empty_state.hide()
+    library_layout.addWidget(view.library_empty_state, 1)
     view.library_bottom_scroll = QScrollBar(Qt.Orientation.Horizontal)
     view.library_bottom_scroll.valueChanged.connect(
         view._on_library_bottom_scroll_changed

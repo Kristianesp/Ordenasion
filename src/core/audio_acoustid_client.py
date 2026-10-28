@@ -308,9 +308,9 @@ class AcoustIDClientMixin:
 
     def _get_acoustid_api_key(self) -> str:
         try:
-            from src.utils.app_config import AppConfig
+            from src.utils.app_config import get_app_config
 
-            config_key = AppConfig().get_acoustid_api_key().strip()
+            config_key = get_app_config().get_acoustid_api_key().strip()
             if config_key:
                 return config_key
         except Exception:

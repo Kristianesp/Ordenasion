@@ -26,11 +26,12 @@ class AppConfig:
     DEFAULT_CONFIG = {
         "interface": {
             "font_size": 13,
-            "theme": "🌞 Claro Elegante",  # Tema por defecto (nombre unificado con themes.py)
+            "theme": "🌞 Claro Elegante",  # Nombre heredado; el aspecto lo decide theme_mode
             "theme_mode": "system",
             "accent_color": "#0078D4",
             "density": "comfortable",
             "ui_advanced_mode": False,
+            "last_page": "home",  # última página visitada (se restaura al abrir)
         },
         "categories": {"auto_save": True, "backup_enabled": True},
         "analysis": {
@@ -632,3 +633,24 @@ class AppConfig:
 
             error(f"Error importando configuración: {e}")
             return False
+
+
+_shared_config: Optional[AppConfig] = None
+
+
+def get_app_config() -> AppConfig:
+    """Instancia única de configuración del proceso.
+
+    La ventana registra la suya con ``set_app_config``; los módulos que no
+    reciben una inyectada usan esta en lugar de crear (y releer) otra.
+    """
+    global _shared_config
+    if _shared_config is None:
+        _shared_config = AppConfig()
+    return _shared_config
+
+
+def set_app_config(config: Optional[AppConfig]) -> None:
+    """Registra la configuración viva (o la olvida con ``None``)."""
+    global _shared_config
+    _shared_config = config

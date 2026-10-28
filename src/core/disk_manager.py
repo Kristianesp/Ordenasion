@@ -33,7 +33,7 @@ import psutil
 
 from src.core.health_service import HealthService
 from src.core.smart_history import SmartHistory
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 from src.utils.formatting import format_bytes
 from src.utils.smartctl_wrapper import CREATE_NO_WINDOW, SmartctlWrapper, SmartQuery, is_user_admin
 
@@ -297,7 +297,7 @@ class DiskManager:
     def __init__(self, app_config: Optional[AppConfig] = None, smartctl: Optional[SmartctlWrapper] = None,
                  history: Optional[SmartHistory] = None):
         self.safe_mode = True  # Por defecto en modo seguro (solo lectura)
-        self.app_config = app_config or AppConfig()
+        self.app_config = app_config or get_app_config()
         self.health_service = HealthService(self.app_config)
         disks_cfg = self.app_config.get("disks", {}) or {}
         self.smart_ttl = float(disks_cfg.get("smart_cache_ttl", 120))

@@ -185,7 +185,7 @@ class PreviewDialog(QDialog):
 
         # Checkbox de confirmacion
         self.confirm_checkbox = CheckBox(
-            "Confirmo que quiero proceder con la organizacion"
+            "Confirmo que quiero proceder con la organización"
         )
         layout.addWidget(self.confirm_checkbox)
 

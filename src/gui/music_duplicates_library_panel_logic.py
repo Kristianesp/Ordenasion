@@ -56,9 +56,9 @@ def sync_library_playback_rate(view: Any, persist: bool = False) -> None:
 
     if persist:
         try:
-            from src.utils.app_config import AppConfig
+            from src.utils.app_config import get_app_config
 
-            AppConfig().set_music_preview_playback_rate(playback_rate)
+            get_app_config().set_music_preview_playback_rate(playback_rate)
         except Exception:
             pass
 
@@ -399,7 +399,7 @@ def clear_selected_track_cache(view: Any) -> None:
         return
     view._lookup_results_by_path.pop(str(file_path), None)
     if audio_metadata_service.clear_lookup_cache(file_path):
-        view.lookup_status_label.setText(f"🧹 Cache online limpiada: {file_path.name}")
+        view.lookup_status_label.setText(f"Cache online limpiada: {file_path.name}")
         view.status_update.emit(f"🧹 Cache online limpiada: {file_path.name}")
         view.refresh_library()
         view._restore_selected_file_paths([str(file_path)], str(file_path))

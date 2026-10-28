@@ -1,14 +1,16 @@
 """Componentes compartidos de la interfaz Fluent 2.0."""
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF
+from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal, QRectF
 from PyQt6.QtGui import QPainter, QLinearGradient, QPen
-from PyQt6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     CardWidget,
     IconWidget,
+    MessageBoxBase,
     PrimaryPushButton,
+    PushButton,
     SubtitleLabel,
     TitleLabel,
     TransparentToolButton,
@@ -218,3 +220,115 @@ class FeatureCard(GlassCard):
         layout.addLayout(text_layout, 1)
 
         self.clicked.connect(self.activated.emit)
+
+
+class EmptyState(QWidget):
+    """Estado vacío común: icono, una frase y, opcionalmente, una acción principal."""
+
+    action_requested = pyqtSignal()
+
+    def __init__(self, icon, text: str, action_text: str = "", parent=None, primary: bool = True):
+        super().__init__(parent)
+        self.setObjectName("emptyState")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 24, 16, 24)
+        layout.setSpacing(10)
+        layout.addStretch(1)
+        self.icon_widget = IconWidget(icon)
+        self.icon_widget.setFixedSize(40, 40)
+        layout.addWidget(self.icon_widget, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.text_label = BodyLabel(text)
+        self.text_label.setWordWrap(True)
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        self.text_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        layout.addWidget(self.text_label)
+        button_class = PrimaryPushButton if primary else PushButton
+        self.action_button = button_class()
+        self.action_button.setText(action_text)
+        self.action_button.setAccessibleName(action_text or "Acción")
+        self.action_button.setVisible(bool(action_text))
+        self.action_button.clicked.connect(self.action_requested.emit)
+        layout.addWidget(self.action_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addStretch(1)
+
+    def set_text(self, text: str) -> None:
+        self.text_label.setText(text)
+
+    def set_action(self, action_text: str) -> None:
+        self.action_button.setText(action_text)
+        self.action_button.setAccessibleName(action_text or "Acción")
+        self.action_button.setVisible(bool(action_text))
+
+
+class ShortcutsDialog(MessageBoxBase):
+    """Ayuda de atajos de teclado (F1), con el estilo de los diálogos Fluent."""
+
+    def __init__(self, shortcuts, parent=None):
+        super().__init__(parent)
+        self.setObjectName("shortcutsDialog")
+        title = SubtitleLabel("Atajos de teclado")
+        self.viewLayout.addWidget(title)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(6)
+        self.rows = []
+        for row, (sequence, description) in enumerate(shortcuts):
+            key = BodyLabel(sequence)
+            key.setObjectName("shortcutKey")
+            key.setStyleSheet("font-weight: 600;")
+            text = BodyLabel(description)
+            grid.addWidget(key, row, 0)
+            grid.addWidget(text, row, 1)
+            self.rows.append((sequence, description))
+        self.viewLayout.addLayout(grid)
+        self.yesButton.setText("Cerrar")
+        self.cancelButton.hide()
+        self.widget.setMinimumWidth(420)
+
+
+def local_folder_from_mime(mime) -> str | None:
+    """Primera carpeta local de un arrastre (None si no hay ninguna)."""
+    from pathlib import Path
+
+    if mime is None or not mime.hasUrls():
+        return None
+    for url in mime.urls():
+        if url.isLocalFile():
+            path = Path(url.toLocalFile())
+            if path.is_dir():
+                return str(path)
+    return None
+
+
+class FolderDropFilter(QObject):
+    """Acepta carpetas locales arrastradas sobre una página y llama a ``callback``.
+
+    Se instala en la página y, si es un área de desplazamiento, en su
+    viewport (que es quien recibe los eventos de arrastre).
+    """
+
+    def __init__(self, target: QWidget, callback, parent=None):
+        super().__init__(parent or target)
+        self._callback = callback
+        self.targets = [target]
+        viewport = getattr(target, "viewport", None)
+        if callable(viewport) and viewport() is not None:
+            self.targets.append(viewport())
+        for widget in self.targets:
+            widget.setAcceptDrops(True)
+            widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+            if local_folder_from_mime(event.mimeData()):
+                event.acceptProposedAction()
+                return True
+        elif kind == QEvent.Type.Drop:
+            folder = local_folder_from_mime(event.mimeData())
+            if folder:
+                event.acceptProposedAction()
+                self._callback(folder)
+                return True
+        return super().eventFilter(obj, event)

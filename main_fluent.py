@@ -21,7 +21,7 @@ def create_window():
     from src.gui.v2.app_window import FluentAppWindow
 
     config = AppConfig()
-    legacy_window = FileOrganizerGUI(app_config_ref=config)
+    legacy_window = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
     return FluentAppWindow(legacy_window)
 
 
@@ -48,7 +48,8 @@ def start_window(app):
         splash.close()
         if window is not None:
             window.close()
-        traceback.print_exc()
+        from src.utils.logger import get_logger
+        get_logger().error("No se pudo iniciar Ordenasion:\n%s", traceback.format_exc())
         if os.environ.get("ORDENASION_SMOKE") == "1":
             raise
         QMessageBox.critical(None, "No se pudo iniciar Ordenasion", f"{exc}\n\nCierra este mensaje y vuelve a intentarlo.")

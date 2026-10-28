@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 
 from src.core.audio_fingerprint import audio_fingerprint_service
 from src.core.audio_index import audio_metadata_service
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 from src.gui.v2.theme import apply_dialog_surface
 from src.gui.music_duplicates_lookup_dialogs import (
     prompt_cover_choice,
@@ -247,7 +247,7 @@ def edit_track_metadata(view: Any, target: Path) -> None:
         update_dialog_variant_details()
 
     def lookup_from_dialog() -> None:
-        if not AppConfig().get_audio_online_metadata_enabled():
+        if not get_app_config().get_audio_online_metadata_enabled():
             dialog_lookup_status.setText(
                 "La búsqueda online esta desactivada en Configuración."
             )

@@ -1,20 +1,16 @@
 """Colores y estilos del visor de Discos.
 
 En el shell Fluent (V2) el QSS lo aporta ``legacy_surface_stylesheet`` por
-objectName; aquí sólo se construye la paleta para el HTML. En el modo
-heredado se genera una hoja compacta a partir de los colores del tema.
+objectName; aquí sólo se construye la paleta para el HTML. Fuera del shell
+se genera una hoja compacta con los mismos tokens.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Dict
 
 from src.gui.v2.theme import current_tokens
-from src.utils.app_config import AppConfig
-
-logger = logging.getLogger(__name__)
-
+from src.utils.app_config import AppConfig, get_app_config
 
 def fluent_palette(config: AppConfig) -> Dict[str, str]:
     """Paleta del HTML a partir de los tokens vivos del shell (sólo lectura)."""
@@ -36,19 +32,13 @@ def fluent_palette(config: AppConfig) -> Dict[str, str]:
     }
 
 
-def legacy_palette(theme_name: str) -> Dict[str, str]:
-    """Colores del sistema de temas heredado, con valores por defecto seguros."""
-    try:
-        from src.utils.themes import ThemeManager
+def legacy_palette(theme_name: str = "") -> Dict[str, str]:
+    """Paleta de la ventana autónoma: los mismos tokens que la V2.
 
-        colors = dict(ThemeManager.get_theme_colors(theme_name))
-    except (ImportError, KeyError, AttributeError) as exc:
-        logger.debug("Tema heredado no disponible (%s); se usan tokens Fluent", exc)
-        colors = {}
-    fallback = fluent_palette(AppConfig())
-    for key, value in fallback.items():
-        colors.setdefault(key, value)
-    return colors
+    ``theme_name`` se conserva por compatibilidad; el sistema de temas
+    antiguo (themes.py) se retiró y el modo lo decide la configuración.
+    """
+    return fluent_palette(get_app_config())
 
 
 def legacy_stylesheet(colors: Dict[str, str], small_px: int, body_px: int, title_px: int) -> str:

@@ -22,7 +22,7 @@ from src.gui.disk_viewer.health_renderer import (render_basic_html, render_conte
                                                  smart_metric_texts)
 from src.gui.disk_viewer.styles import fluent_palette, legacy_palette, legacy_stylesheet
 from src.gui.v2.theme import apply_control_sizes, html_type_scale
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 from src.utils.formatting import format_bytes
 
 logger = logging.getLogger(__name__)
@@ -38,14 +38,14 @@ class DiskViewer(QWidget):
     analysis_requested = pyqtSignal(str)
     disks_refreshed = pyqtSignal(object)  # Snapshot existente, sin lecturas adicionales
 
-    def __init__(self, parent=None, disk_manager=None):
+    def __init__(self, parent=None, disk_manager=None, app_config: Optional[AppConfig] = None):
         super().__init__(parent)
         self.disk_manager = disk_manager
         self.current_selection: Optional[str] = None
         self.available_disks: tuple = ()
         self.disks_updated_at: Optional[datetime] = None
         self.disks_refresh_error: Optional[str] = None
-        self._fallback_config: Optional[AppConfig] = None
+        self._fallback_config: Optional[AppConfig] = app_config
         self._shown_disk: Optional[DiskInfo] = None
         self._last_report = None
         self._report_request = 0
@@ -174,6 +174,8 @@ class DiskViewer(QWidget):
 
     def refresh_disks(self) -> None:
         """Vuelve a enumerar las unidades (rápido: sin SMART en este hilo)."""
+        if self.disk_manager is None or getattr(self, "_closed", False):
+            return
         try:
             self.log_message("Actualizando información de unidades…")
             disks = self.disk_manager.get_all_disks()
@@ -415,7 +417,9 @@ class DiskViewer(QWidget):
             self._render_report(self._shown_disk, self._last_report)
 
     def _get_runtime_config(self) -> AppConfig:
-        """Configuración viva del shell; si no hay, una única instancia propia."""
+        """Configuración inyectada o la del shell; si no, la compartida del proceso."""
+        if self._fallback_config is not None:
+            return self._fallback_config
         widget = self.parentWidget()
         while widget is not None:
             config = getattr(widget, "config", None)
@@ -423,7 +427,7 @@ class DiskViewer(QWidget):
                 return config
             widget = widget.parentWidget()
         if self._fallback_config is None:
-            self._fallback_config = AppConfig()
+            self._fallback_config = get_app_config()
         return self._fallback_config
 
     def get_current_theme_name(self) -> str:

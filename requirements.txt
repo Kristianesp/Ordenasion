@@ -1,55 +1,22 @@
-# 🚀 DEPENDENCIAS - ORGANIZADOR PROFESIONAL DE DISCOS
-# Archivo de requisitos para instalar todas las dependencias necesarias
+# Dependencias de Ordenasion (aplicación). Python 3.11 o superior (CI: 3.13).
+# Límites superiores compatibles: se admiten correcciones y versiones menores,
+# no saltos de versión mayor sin revisar. Herramientas de empaquetado en
+# requirements-build.txt; tests: pytest.
+#
+#   pip install -r requirements.txt
 
-# === DEPENDENCIAS ACTIVAS ===
-PyQt6>=6.4.0          # Interfaz gráfica principal
-PyQt6-Fluent-Widgets>=1.11.3  # Componentes Fluent UI comunitarios (GPLv3)
-psutil>=5.9.0          # Información del sistema y discos
-WMI>=1.5.1; sys_platform == "win32"
-send2trash>=1.8.0     # Papelera de reciclaje segura
-mutagen>=1.47.0       # Metadatos locales de audio
+# Interfaz
+PyQt6>=6.5,<7                      # 6.5+: QStyleHints.colorScheme (tema Sistema en caliente)
+PyQt6-Fluent-Widgets>=1.11.3,<1.12  # Componentes Fluent (GPLv3); la V2 usa su API interna de estilos
 
-# === DEPENDENCIAS OPCIONALES - PRIORIDAD 4 ===
-# Las siguientes dependencias se instalarán según necesidad:
+# Sistema y discos
+psutil>=5.9,<8
+WMI>=1.5.1,<2; sys_platform == "win32"   # Mapeo de unidades y discos físicos (pywin32 lo trae)
 
-# Para análisis de contenido avanzado:
-# python-magic>=0.4.27          # Detección de tipos de archivo
-# exifread>=3.1.0               # Metadatos de imágenes
-# musicbrainzngs>=0.7.1         # Metadatos online de musica
-# pyacoustid>=1.3.0             # Fingerprinting perceptual
+# Archivos
+Send2Trash>=1.8,<3                 # Papelera de reciclaje segura
+mutagen>=1.47,<2                   # Metadatos locales de audio
 
-# Para procesamiento de texto:
-# python-docx>=0.8.11           # Lectura de documentos Word
-# PyPDF2>=3.0.0                 # Lectura de PDFs
-# openpyxl>=3.1.0               # Lectura de Excel
-
-# Para compresión y archivos:
-# py7zr>=0.20.0                 # Soporte para archivos 7z
-# rarfile>=4.0                  # Soporte para archivos RAR
-
-# Para interfaz avanzada:
-# PyQt6-Charts>=6.4.0           # Gráficos avanzados de Qt
-# PyQt6-WebEngine>=6.4.0        # Motor web integrado
-
-# === INSTRUCCIONES DE INSTALACIÓN ===
-
-# Instalar dependencias básicas:
-# pip install -r requirements.txt
-
-# Instalar dependencias opcionales según necesidad:
-# pip install python-magic exifread mutagen
-# pip install python-docx PyPDF2 openpyxl
-# pip install py7zr rarfile
-# pip install PyQt6-Charts PyQt6-WebEngine
-
-# === NOTAS IMPORTANTES ===
-
-# 1. Algunas dependencias pueden requerir compiladores en Windows
-# 2. python-magic puede requerir instalación manual en algunos sistemas
-# 3. Las dependencias se instalarán progresivamente según las prioridades
-# 4. Se recomienda usar un entorno virtual: python -m venv venv
-
-# === VERSIÓN DEL ARCHIVO ===
-# Versión: 1.0
-# Última actualización: 22/08/2025
-# Compatible con: Python 3.8+
+# Opcional, fuera de pip: fpcalc (Chromaprint) y smartctl.exe en bin/ para
+# huellas acústicas y salud SMART. La búsqueda online (AcoustID,
+# MusicBrainz, Discogs) usa urllib de la biblioteca estándar.

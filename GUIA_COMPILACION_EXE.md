@@ -153,9 +153,8 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f4e6'
 
 #### Cambios Realizados
 
-1. **En `main_optimized.py`:**
-   - Wrapper `LoggingStdout` con manejo seguro de Unicode
-   - Filtrado de caracteres no soportados
+1. **En el punto de entrada (`main_fluent.py`):**
+   - Sin `print()` con emojis: los mensajes van al logger (UTF-8)
 
 2. **En `application_state.py`:**
    - Cambiar `"🌞 Claro Elegante"` → `"Claro Elegante"`
@@ -166,7 +165,7 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f4e6'
    - Usar prefijos ASCII en lugar de emojis
 
 ### Archivos Afectados
-- `main_optimized.py`
+- `main_fluent.py`
 - `src/core/application_state.py`
 - `OrganizadorAlpha_OPTIMIZED.spec`
 - `OrganizadorAlpha_COMPLETE_FIXED.spec`
@@ -182,7 +181,7 @@ Los emojis en el log son solo visuales - el archivo `startup_log.txt` se guarda 
 ### Antes de Compilar
 
 - [ ] Verificar que `OrganizadorAlpha_OPTIMIZED.spec` existe
-- [ ] Verificar que `main_optimized.py` es el punto de entrada
+- [ ] Verificar que `main_fluent.py` es el punto de entrada (el único; `main.py` y `main_optimized.py` se eliminaron en 3.6)
 - [ ] Verificar que no hay emojis en prints de archivos `.spec`
 - [ ] Verificar que `ApplicationState` NO hereda de QObject directamente
 
@@ -341,7 +340,7 @@ for item in pyqt6_datas:
 
 1. **Siempre probar en desarrollo antes de compilar:**
    ```bash
-   python main_optimized.py
+   python main_fluent.py
    ```
 
 2. **Mantener el código sin dependencias pesadas:**
@@ -402,12 +401,14 @@ for item in pyqt6_datas:
 ### Archivos de Configuración
 - `OrganizadorAlpha_OPTIMIZED.spec` - ✅ Usar este
 - `compilar_exe_completo.bat` - Script de compilación
-- `main_optimized.py` - Punto de entrada
+- `main_fluent.py` - Punto de entrada
 
 ### Archivos de Código Críticos
 - `src/core/application_state.py` - Estado de la aplicación (QObject interno)
 - `src/utils/smartctl_wrapper.py` - Wrapper para smartctl
-- `src/gui/main_window.py` - Ventana principal
+- `src/gui/main_window.py` - Vista de Organizar y fábrica de herramientas
+- `src/gui/organize_controller.py` - Estado y workers de Organizar
+- `src/gui/v2/app_window.py` - Ventana Fluent
 
 ### Archivos de Log
 - `dist/startup_log.txt` - Log de inicio del ejecutable

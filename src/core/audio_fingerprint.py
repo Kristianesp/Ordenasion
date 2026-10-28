@@ -35,9 +35,9 @@ class AudioFingerprintService(
 
     def _is_online_metadata_enabled(self) -> bool:
         try:
-            from src.utils.app_config import AppConfig
+            from src.utils.app_config import get_app_config
 
-            return AppConfig().get_audio_online_metadata_enabled()
+            return get_app_config().get_audio_online_metadata_enabled()
         except Exception:
             return True
 

@@ -32,7 +32,7 @@ class DuplicatesActionsMixin:
 
     # ------------------------------------------------------------------ menú
     def build_keep_rules_menu(self, menu):
-        rules_menu = menu.addMenu("🧭 Regla para conservar")
+        rules_menu = menu.addMenu("Regla para conservar")
         self.keep_rule_group = QActionGroup(self)
         self.keep_rule_group.setExclusive(True)
         current = self.app_config.get("duplicates.keep_rule", "newest")
@@ -45,7 +45,7 @@ class DuplicatesActionsMixin:
             rules_menu.addAction(action)
             self.keep_rule_actions[rule] = action
         rules_menu.addSeparator()
-        self.add_preferred_folder_action = rules_menu.addAction("📂 Añadir carpeta preferida…")
+        self.add_preferred_folder_action = rules_menu.addAction("Añadir carpeta preferida…")
         self.add_preferred_folder_action.triggered.connect(self.add_preferred_folder)
         self.clear_preferred_folders_action = rules_menu.addAction("Quitar carpetas preferidas")
         self.clear_preferred_folders_action.triggered.connect(self.clear_preferred_folders)

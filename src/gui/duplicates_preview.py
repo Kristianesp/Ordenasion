@@ -62,24 +62,24 @@ class DuplicatesPreviewMixin:
         apply_menu_surface(menu)
         ext = file_path.suffix.lower()
         if ext in IMAGE_EXTENSIONS:
-            action = QAction("🖼️ Previsualizar imagen", self)
+            action = QAction("Previsualizar imagen", self)
             action.triggered.connect(lambda: self.preview_image(file_path))
             menu.addAction(action)
         if ext in VIDEO_EXTENSIONS:
-            action = QAction("🎬 Reproducir vídeo", self)
+            action = QAction("Reproducir vídeo", self)
             action.triggered.connect(lambda: self.play_video(file_path))
             menu.addAction(action)
-        open_action = QAction("📄 Abrir archivo", self)
+        open_action = QAction("Abrir archivo", self)
         open_action.triggered.connect(lambda: self.open_file(file_path))
         menu.addAction(open_action)
-        folder_action = QAction("📁 Abrir ubicación", self)
+        folder_action = QAction("Abrir ubicación", self)
         folder_action.triggered.connect(lambda: self.open_file_location(file_path))
         menu.addAction(folder_action)
         menu.addSeparator()
-        keep_action = QAction("🟢 Conservar esta copia", self)
+        keep_action = QAction("Conservar esta copia", self)
         keep_action.triggered.connect(self.mark_selected_as_preferred_original)
         menu.addAction(keep_action)
-        ignore_action = QAction("🙈 Ignorar grupo", self)
+        ignore_action = QAction("Ignorar grupo", self)
         ignore_action.triggered.connect(self.ignore_selected_group)
         menu.addAction(ignore_action)
         menu.exec(self.duplicates_table.viewport().mapToGlobal(position))
@@ -89,7 +89,7 @@ class DuplicatesPreviewMixin:
             QMessageBox.warning(self, "Error", f"El archivo no existe:\n{file_path}")
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"🖼️ Previsualización: {file_path.name}")
+        dialog.setWindowTitle(f"Previsualización: {file_path.name}")
         dialog.setModal(True)
         dialog.resize(800, 600)
         layout = QVBoxLayout(dialog)
@@ -97,7 +97,7 @@ class DuplicatesPreviewMixin:
             size_text = self.format_file_size(file_path.stat().st_size)
         except OSError:
             size_text = "?"
-        layout.addWidget(QLabel(f"📂 {file_path.parent}\n📄 {file_path.name}\n💾 {size_text}"))
+        layout.addWidget(QLabel(f"{file_path.parent}\n{file_path.name}\n{size_text}"))
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -105,7 +105,7 @@ class DuplicatesPreviewMixin:
         image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         pixmap = QPixmap(str(file_path))
         if pixmap.isNull():
-            image_label.setText("❌ No se pudo cargar la imagen")
+            image_label.setText("No se pudo cargar la imagen")
         else:
             if pixmap.width() > 700 or pixmap.height() > 700:
                 pixmap = pixmap.scaled(700, 700, Qt.AspectRatioMode.KeepAspectRatio,

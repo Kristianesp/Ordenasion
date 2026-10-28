@@ -28,7 +28,7 @@ class RulePanel(QDialog):
     def __init__(self, parent=None, category_manager: CategoryManager | None = None):
         super().__init__(parent)
         self.category_manager = category_manager or CategoryManager()
-        self.setWindowTitle("📋 Reglas personalizadas")
+        self.setWindowTitle("Reglas personalizadas")
         self.setMinimumSize(680, 480)
         self._build_ui()
         self.refresh_rules()
@@ -72,10 +72,10 @@ class RulePanel(QDialog):
         content.addWidget(right_box, 1)
 
         buttons = QHBoxLayout()
-        self.add_btn = QPushButton("➕ Añadir")
-        self.edit_btn = QPushButton("✏️ Editar")
-        self.toggle_btn = QPushButton("⏯️ Activar/Desactivar")
-        self.delete_btn = QPushButton("🗑️ Eliminar")
+        self.add_btn = QPushButton("Añadir")
+        self.edit_btn = QPushButton("Editar")
+        self.toggle_btn = QPushButton("Activar/Desactivar")
+        self.delete_btn = QPushButton("Eliminar")
         self.close_btn = QPushButton("Cerrar")
         self.add_btn.clicked.connect(self.add_rule)
         self.edit_btn.clicked.connect(self.edit_rule)

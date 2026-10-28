@@ -19,10 +19,9 @@ def shell_window(tmp_path_factory):
     app = QApplication.instance() or QApplication([])
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(FileOrganizerGUI, "_init_disk_manager", lambda self: None)
-        patch.setattr(FileOrganizerGUI, "_refresh_disk_viewer_after_theme", lambda *_: None)
         config = AppConfig(str(tmp_path_factory.mktemp("theme-config") / "config.json"))
         config.set_theme_mode("light")
-        legacy = FileOrganizerGUI(app_config_ref=config)
+        legacy = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
         window = FluentAppWindow(legacy)
         window.resize(1280, 800)
         window.show()
