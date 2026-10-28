@@ -82,6 +82,8 @@ def test_get_drive_type_w_is_preferred(tmp_path, monkeypatch, windows_volumes):
 
 
 def test_get_disk_info_uses_snapshot_and_most_specific_mount(tmp_path, monkeypatch):
+    # Puntos de montaje POSIX: en Windows la unidad del sistema se decide por letra
+    monkeypatch.setattr(dm.sys, "platform", "linux")
     parts = [Partition("/dev/a", "/", "ext4", "rw"), Partition("/dev/b", "/mnt/datos", "ext4", "rw")]
     calls = []
     monkeypatch.setattr(dm.psutil, "disk_partitions", lambda all=False: calls.append(1) or parts)

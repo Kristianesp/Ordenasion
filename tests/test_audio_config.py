@@ -1,4 +1,11 @@
+import os
+
 from src.utils.app_config import AppConfig
+
+
+def native(path):
+    """Las rutas se guardan con los separadores del sistema."""
+    return os.path.normpath(path)
 
 
 def test_audio_config_roundtrip(tmp_path):
@@ -12,7 +19,7 @@ def test_audio_config_roundtrip(tmp_path):
     assert config.set_audio_online_metadata_enabled(True)
 
     reloaded = AppConfig(str(tmp_path / "app_config.json"))
-    assert reloaded.get_audio_library_roots() == ["/music", "/archive/music"]
+    assert reloaded.get_audio_library_roots() == [native("/music"), native("/archive/music")]
     assert reloaded.get_audio_duplicate_policy() == "review"
     assert reloaded.get_audio_online_metadata_enabled() is True
     assert (
