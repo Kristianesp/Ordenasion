@@ -39,6 +39,8 @@ def run_smoke(start_window, dispose_window=None):
                 from src.core.audio_fingerprint import audio_fingerprint_service
 
                 app = QApplication.instance() or QApplication(sys.argv)
+                from src.utils import gc_guard
+                gc_guard.install(app)
                 bundle = BRANDING_DIR.parents[1]
                 report["assets"] = {
                     "icon": not QImage(str(ICON_PATH)).isNull(),
