@@ -27,6 +27,20 @@ def create_window():
     return window
 
 
+def dispose_window(window) -> None:
+    """Destruye la ventana y el splash antes de que Python finalice.
+
+    Si quedan vivos hasta el final, la limpieza de PyQt los borra mientras
+    recorre sus envoltorios y la cascada de hijos (tablas Fluent incluidas)
+    puede acabar en un fallo de segmentación al salir.
+    """
+    from PyQt6 import sip
+
+    for widget in (getattr(window, "_startup_splash", None), window):
+        if widget is not None and not sip.isdeleted(widget):
+            sip.delete(widget)
+
+
 def start_window(app):
     mode = startup_theme_mode()
     app.setApplicationName(APP_NAME)
@@ -61,7 +75,7 @@ def start_window(app):
 def main() -> int:
     if os.environ.get("ORDENASION_SMOKE") == "1":
         from src.gui.v2.release_smoke import run_smoke
-        return run_smoke(start_window)
+        return run_smoke(start_window, dispose_window)
     app = QApplication(sys.argv)
     window = start_window(app)
     if window is None:
@@ -70,6 +84,7 @@ def main() -> int:
         return app.exec()
     finally:
         window._startup_splash.close()
+        dispose_window(window)
 
 
 if __name__ == "__main__":

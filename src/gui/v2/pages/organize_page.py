@@ -365,7 +365,7 @@ class OrganizePage(ScrollArea):
         self.selection_count_label = self.filter_bar.selection_count_label
         results.addWidget(self.filter_bar)
 
-        self.movements_model = VirtualizedMovementsModel()
+        self.movements_model = VirtualizedMovementsModel(parent=self)
         self.movements_table = support.MovementsTable(
             self.movements_model, typography_scale(self.config).row_height)
         self.movements_table.customContextMenuRequested.connect(self.show_context_menu)

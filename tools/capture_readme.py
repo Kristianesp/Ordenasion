@@ -41,7 +41,7 @@ def main():
             from src.core.audio_index import audio_metadata_service
             from src.core.audio_fingerprint import audio_fingerprint_service
             from src.gui.v2.app_window import FluentAppWindow
-            from src.gui.v2.pages.organize_page import OrganizePage
+            from src.gui.organize_controller import OrganizeController
             from src.gui.v2.theme import register_bundled_fonts
             from src.utils.app_config import AppConfig
 
@@ -71,7 +71,7 @@ def main():
                                     used_size=156 * 1024**3, free_size=100 * 1024**3)
             denied = AssertionError("Servicio externo bloqueado en captura README")
             with contextlib.ExitStack() as guards:
-                for owner, method in ((OrganizePage, "start_analysis"),
+                for owner, method in ((OrganizeController, "start_analysis"),
                                       (DiskManager, "get_all_disks"),
                                       (audio_metadata_service, "update_track_tags"),
                                       (audio_fingerprint_service, "get_or_lookup_online_metadata"),

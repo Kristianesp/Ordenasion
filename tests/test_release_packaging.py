@@ -73,7 +73,7 @@ def test_source_release_smoke_preserves_caller_config_and_exits_cleanly(tmp_path
     assert process.returncode == 0, result.get("error", process.stderr)
     assert result["version"] == APP_VERSION and result["status"] == "ok"
     assert all(result["assets"].values()) and result["qt_multimedia"]
-    assert result["first_frame"] and result["graceful_close"]
+    assert result["first_frame"] and result["graceful_close"] and result["disposed"]
     assert config.read_bytes() == content
     assert Path(result["temporary_cwd"]) != tmp_path
 
