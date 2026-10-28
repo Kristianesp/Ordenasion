@@ -95,6 +95,8 @@ def start_window(app):
 
 def _close_bootloader_splash() -> None:
     """Cierra la imagen que muestra el ejecutable mientras se descomprime."""
+    if "_PYI_SPLASH_IPC" not in os.environ:
+        return  # sin imagen de carga: código fuente o versión portable
     try:
         import pyi_splash  # sólo existe en el ejecutable con Splash de PyInstaller
     except ImportError:
