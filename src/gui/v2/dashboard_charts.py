@@ -8,6 +8,23 @@ from src.gui.v2.space_map import format_bytes
 from src.gui.v2.theme import current_tokens, typography_scale
 
 
+RESERVED_LABEL = "Reservado por el sistema"
+RESERVED_HELP = ("Espacio que el sistema de archivos no informa ni como usado ni como libre "
+                 "(bloques reservados, metadatos).")
+
+
+def usage_percent_of(disk, values=None):
+    """Mismo porcentaje que muestra Discos: DiskInfo.usage_percent (usado / total)."""
+    values = values or disk_values(disk)
+    if not values:
+        return None
+    percent = getattr(disk, "usage_percent", None)
+    if isinstance(percent, (int, float)) and 0 <= percent <= 100:
+        return float(percent)
+    total, used, _free = values
+    return round(used / total * 100, 1)
+
+
 def disk_values(disk):
     """Rechaza snapshots incompletos antes de dibujar proporciones."""
     if disk is None:
@@ -19,6 +36,9 @@ def disk_values(disk):
     if total <= 0 or min(used, free) < 0 or used + free > total:
         return None
     return total, used, free
+
+
+EMPTY_SPACE_TEXT = "Analiza una carpeta para ver qué ocupa más espacio."
 
 
 class DiskUsageChart(QWidget):
@@ -36,9 +56,12 @@ class DiskUsageChart(QWidget):
 
     def set_disk(self, disk):
         self.values = disk_values(disk)
+        self.percent = usage_percent_of(disk, self.values)
         if self.values:
             total, used, free = self.values
-            text = f"{used / total * 100:.1f}% ocupado. {used:,} bytes ocupados; {free:,} bytes libres; {total:,} bytes totales."
+            text = f"{self.percent:.1f}% ocupado. {used:,} bytes ocupados; {free:,} bytes libres; {total:,} bytes totales."
+            if total - used - free > 0:
+                text += f" {RESERVED_LABEL}: {total - used - free:,} bytes. {RESERVED_HELP}"
         else:
             text = "Ocupación no disponible. Abre Discos para consultar las unidades."
         self.setAccessibleDescription(text)
@@ -67,24 +90,33 @@ class DiskUsageChart(QWidget):
                              "Sin datos de ocupación\nConsulta las unidades en Discos.")
             return
         total, used, free = self.values
-        colors = [tokens.accent, tokens.success, tokens.stroke]
+        colors = [tokens.accent, tokens.success, tokens.text_secondary]
         segments = [used, free, total - used - free]
-        angle = 90 * 16
+        # Extremos planos y ángulos acumulados: con FlatCap un segmento no tapa
+        # al anterior (con SquareCap un 3 % ocupado quedaba oculto bajo "libre").
+        start = 90 * 16
+        done = 0
         for value, color in zip(segments, colors):
-            span = round(value / total * 360 * 16)
-            painter.setPen(QPen(QColor(color), stroke))
-            painter.drawArc(ring, angle, -span)
-            angle -= span
+            if value <= 0:
+                continue
+            end = round((done + value) / total * 360 * 16)
+            span = end - round(done / total * 360 * 16)
+            done += value
+            pen = QPen(QColor(color), stroke)
+            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+            painter.setPen(pen)
+            painter.drawArc(ring, start, -span)
+            start -= span
         painter.setPen(QColor(tokens.text_primary))
         bold = QFont(font)
         bold.setBold(True)
         bold.setPixelSize(scale.display)
         painter.setFont(bold)
-        painter.drawText(ring, Qt.AlignmentFlag.AlignCenter, f"{used / total * 100:.0f}%")
+        painter.drawText(ring, Qt.AlignmentFlag.AlignCenter, f"{self.percent:.0f}%")
         painter.setFont(font)
         legend = [("Ocupado", used), ("Libre", free)]
-        if segments[2]:
-            legend.append(("Sin desglose", segments[2]))
+        if segments[2] > 0:
+            legend.append((RESERVED_LABEL, segments[2]))
         x = diameter + 28
         for index, ((name, value), color) in enumerate(zip(legend, colors)):
             y = 39 + index * 35
@@ -133,7 +165,7 @@ class FolderSizeChart(QWidget):
             text = prefix + "; ".join(f"{name}: {value:,} bytes" for name, value, _ in self.bars)
         else:
             text = ("Sin tamaños disponibles en este análisis parcial." if self.partial else
-                    "La carpeta analizada no contiene bytes lógicos.") if result else "Sin análisis de espacio. Analiza una carpeta para ver su distribución."
+                    "La carpeta analizada no contiene bytes lógicos.") if result else EMPTY_SPACE_TEXT
         self.setAccessibleDescription(text)
         self.setToolTip(text)
         self.update()
@@ -150,8 +182,7 @@ class FolderSizeChart(QWidget):
             painter.drawText(QRectF(12, 0, max(0, self.width() - 24), self.height()),
                              Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
                              ("Sin tamaños disponibles en este análisis parcial" if self.partial else
-                              "Carpeta sin contenido medible") if self.has_result else
-                             "Sin análisis de espacio\nAnaliza una carpeta para encontrar qué ocupa más.")
+                              "Carpeta sin contenido medible") if self.has_result else EMPTY_SPACE_TEXT)
             return
         width = max(0, self.width() - 8)
         for index, (name, value, _) in enumerate(self.bars):
