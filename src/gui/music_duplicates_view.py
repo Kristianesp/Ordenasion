@@ -16,7 +16,7 @@ from PyQt6.QtCore import (
     QEasingCurve,
     QPoint,
 )
-from PyQt6.QtGui import QAction, QPixmap
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtWidgets import (
     QWidget,
@@ -26,30 +26,27 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QLineEdit,
     QFileDialog,
-    QListWidget,
-    QTextEdit,
     QMessageBox,
     QCheckBox,
     QTabWidget,
     QTableWidgetItem,
-    QInputDialog,
-    QDialog,
-    QDialogButtonBox,
-    QMenu,
     QProgressBar,
-    QComboBox,
-    QSplitter,
     QFrame,
     QGraphicsOpacityEffect,
-    QSlider,
     QScrollBar,
 )
 
+from src.utils.paths import user_data_file
 from src.core.audio_fingerprint import audio_fingerprint_service
 from src.core.audio_index import audio_metadata_service
+from src.core.duplicate_actions import (
+    ACTION_DELETE,
+    DuplicateActionWorker,
+    build_plan,
+    find_emptied_groups,
+)
 from src.core.transaction_manager import TransactionManager
 from src.gui.music_duplicates_constants import (
-    DUPLICATES_COLUMN_LABELS,
     LIBRARY_COLUMN_DEFAULT_ORDER,
     LIBRARY_COLUMN_DEFAULTS,
     LIBRARY_COLUMN_LABELS,
@@ -171,8 +168,15 @@ class MusicDuplicatesView(QWidget):
     LIBRARY_COLUMN_DEFAULTS = LIBRARY_COLUMN_DEFAULTS
     LIBRARY_SPLITTER_DEFAULT_SIZES = LIBRARY_SPLITTER_DEFAULT_SIZES
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, app_config=None):
         super().__init__(parent)
+        self._app_config = app_config
+        # Guardado de anchos con rebote: arrastrar una columna (o restaurar el
+        # diseño al arrancar) no reescribe la configuración en cada píxel.
+        self._column_widths_timer = QTimer(self)
+        self._column_widths_timer.setSingleShot(True)
+        self._column_widths_timer.setInterval(400)
+        self._column_widths_timer.timeout.connect(self._flush_column_widths)
         self.current_folder: str | None = None
         self.results: Dict[str, List[Dict[str, Any]]] = {}
         self.library_all_rows: list[Dict[str, Any]] = []
@@ -183,6 +187,7 @@ class MusicDuplicatesView(QWidget):
         self._lookup_active_token = 0
         self._lookup_busy = False
         self._scan_worker: AudioLibraryWorker | None = None
+        self._delete_worker: DuplicateActionWorker | None = None
         self._scan_busy = False
         self._restoring_library_header = False
         self._checked_library_paths: set[str] = set()
@@ -195,7 +200,7 @@ class MusicDuplicatesView(QWidget):
         self._toast_hide_timer.setSingleShot(True)
         self._toast_hide_timer.timeout.connect(self._start_hide_music_toast)
         self.transaction_manager = TransactionManager(
-            "audio_duplicate_operations_log.json"
+            str(user_data_file("audio_duplicate_operations_log.json"))
         )
         self.audio_output = QAudioOutput(self)
         self.audio_output.setVolume(0.75)
@@ -229,11 +234,12 @@ class MusicDuplicatesView(QWidget):
         row = QHBoxLayout()
         row.setSpacing(10)
         self.path_input = QLineEdit()
-        self.path_input.setPlaceholderText("Selecciona una carpeta de musica...")
+        self.path_input.setPlaceholderText("Selecciona una carpeta de música...")
         bind_path_tooltip(self.path_input)
         row.addWidget(self.path_input, 1)
 
-        self.browse_btn = QPushButton("Examinar")
+        self.browse_btn = QPushButton("Examinar…")
+        self.browse_btn.setToolTip("Elegir la carpeta de música que se analiza")
         self.browse_btn.clicked.connect(self._browse)
         row.addWidget(self.browse_btn)
 
@@ -241,6 +247,11 @@ class MusicDuplicatesView(QWidget):
         self.scan_btn.setObjectName("music_scan_button")
         self.scan_btn.clicked.connect(self.scan)
         row.addWidget(self.scan_btn)
+
+        self.cancel_scan_btn = QPushButton("Cancelar")
+        self.cancel_scan_btn.setVisible(False)
+        self.cancel_scan_btn.clicked.connect(self.cancel_scan)
+        row.addWidget(self.cancel_scan_btn)
         layout.addLayout(row)
 
         opts = QHBoxLayout()
@@ -250,10 +261,10 @@ class MusicDuplicatesView(QWidget):
         opts.addStretch()
         layout.addLayout(opts)
 
-        self.summary_label = QLabel("Sin resultados todavia.")
+        self.summary_label = QLabel("Elige una carpeta y pulsa «Analizar audio» para buscar duplicados.")
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
-        self.scan_status_label = QLabel("Biblioteca musical lista.")
+        self.scan_status_label = QLabel("")
         self.scan_status_label.setWordWrap(True)
         layout.addWidget(self.scan_status_label)
         self.scan_progress = QProgressBar()
@@ -290,7 +301,7 @@ class MusicDuplicatesView(QWidget):
         toast_layout = QHBoxLayout(self.music_toast_frame)
         toast_layout.setContentsMargins(18, 12, 18, 12)
         toast_layout.setSpacing(10)
-        self.music_toast_icon = QLabel("🤖")
+        self.music_toast_icon = QLabel("")
         self.music_toast_icon.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
@@ -337,7 +348,7 @@ class MusicDuplicatesView(QWidget):
         apply_control_sizes(self)
 
     def _browse(self):
-        folder = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta de musica")
+        folder = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta de música")
         if folder:
             self.current_folder = folder
             self.path_input.setText(folder)
@@ -405,9 +416,7 @@ class MusicDuplicatesView(QWidget):
             self.music_toast_frame.hide()
 
     def _restore_music_state(self):
-        from src.utils.app_config import AppConfig
-
-        app_config = AppConfig()
+        app_config = self.app_config
         last_folder = app_config.get_music_last_folder().strip()
         recursive = app_config.get_music_recursive()
         preview_playback_rate = app_config.get_music_preview_playback_rate()
@@ -725,7 +734,7 @@ class MusicDuplicatesView(QWidget):
 
     def stop_duplicate_preview(self):
         self.audio_player.stop()
-        self.status_update.emit("⏹ Reproduccion detenida")
+        self.status_update.emit("⏹ Reproducción detenida")
 
     def open_selected_duplicate_folder(self):
         selected_paths = self._selected_duplicate_paths()
@@ -742,6 +751,18 @@ class MusicDuplicatesView(QWidget):
                 self, "Duplicados", f"No se pudo abrir la carpeta: {exc}"
             )
 
+    def cancel_scan(self):
+        worker = self._scan_worker
+        if worker is not None and worker.isRunning():
+            worker.stop()
+            self.scan_status_label.setText("Cancelando análisis musical…")
+
+    def cancel_lookup(self):
+        worker = self._lookup_worker
+        if worker is not None and worker.isRunning():
+            worker.stop()
+            self.lookup_status_label.setText("Cancelando búsqueda online…")
+
     def delete_selected_duplicates(self):
         selected_paths = self._selected_duplicate_paths()
         if not selected_paths:
@@ -749,6 +770,23 @@ class MusicDuplicatesView(QWidget):
                 self,
                 "Duplicados",
                 "Selecciona una o varias pistas duplicadas para enviar a papelera",
+            )
+            return
+        if self._delete_worker is not None and self._delete_worker.isRunning():
+            QMessageBox.information(self, "Duplicados", "Ya hay una retirada en curso.")
+            return
+        groups = {
+            key: [str(Path(item.get("file_path", ""))) for item in items]
+            for key, items in self.results.items()
+        }
+        emptied = find_emptied_groups(groups, selected_paths, exists=lambda _p: True)
+        if emptied:
+            QMessageBox.warning(
+                self,
+                "No se pueden retirar todas las copias",
+                f"Has seleccionado todas las copias de {len(emptied)} grupo(s). "
+                "Deja sin seleccionar al menos una pista por grupo (por ejemplo, la marcada "
+                "como «⭐ Conservar»).",
             )
             return
         reply = QMessageBox.question(
@@ -761,23 +799,49 @@ class MusicDuplicatesView(QWidget):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        deleted = []
-        destinations = []
-        for file_path in selected_paths:
-            path = Path(file_path)
-            if self.transaction_manager.safe_delete_file(path, use_trash=True):
-                audio_metadata_service.remove_track(path)
-                deleted.append(str(path))
-                destinations.append(self.transaction_manager.last_removal_destination)
-        if not deleted:
-            QMessageBox.warning(
-                self, "Duplicados", "No se pudo eliminar ninguna pista seleccionada"
+        keep_paths = {key: paths[0] for key, paths in groups.items() if paths}
+        plan = build_plan(groups, selected_paths, ACTION_DELETE, keep_paths=keep_paths,
+                          exists=lambda _p: True)
+        self._delete_worker = DuplicateActionWorker(
+            plan,
+            self.transaction_manager,
+            verify_hash=False,
+            on_success=lambda item: audio_metadata_service.remove_track(Path(item.source)),
+        )
+        self._delete_worker.finished_ok.connect(self._on_delete_finished)
+        self._delete_worker.failed.connect(
+            lambda message: QMessageBox.warning(self, "Duplicados", f"Error al retirar: {message}")
+        )
+        self.delete_duplicate_btn.setEnabled(False)
+        self.status_update.emit(f"🗑️ Retirando {len(plan)} pista(s)…")
+        self._delete_worker.start()
+
+    def _on_delete_finished(self, summary: Dict[str, Any]) -> None:
+        self._delete_worker = None
+        done = summary.get("done", [])
+        problems = summary.get("failed", []) + summary.get("skipped", [])
+        deleted = [item["source"] for item in done]
+        if deleted:
+            self._remove_deleted_duplicates_from_results(deleted)
+            self.refresh_library()
+            self.refresh_missing_metadata()
+            destinations = [str(item.get("destination") or "") for item in done]
+            self.status_update.emit(
+                f"Pistas retiradas: {len(deleted)}. Destino: {', '.join(dict.fromkeys(d for d in destinations if d))}"
             )
-            return
-        self._remove_deleted_duplicates_from_results(deleted)
-        self.refresh_library()
-        self.refresh_missing_metadata()
-        self.status_update.emit(f"Pistas retiradas: {len(deleted)}. Destino: {', '.join(dict.fromkeys(destinations))}")
+        if problems:
+            reasons = "\n".join(
+                f"- {Path(item['source']).name}: {item.get('reason') or 'motivo no disponible'}"
+                for item in problems[:10]
+            )
+            QMessageBox.warning(
+                self,
+                "Duplicados",
+                f"No se pudieron retirar {len(problems)} pista(s):\n{reasons}",
+            )
+        elif not deleted:
+            QMessageBox.warning(self, "Duplicados", "No se pudo eliminar ninguna pista seleccionada")
+        self._update_duplicate_preview()
 
     def _remove_deleted_duplicates_from_results(self, deleted_paths: list[str]) -> None:
         deleted_set = {str(Path(path)) for path in deleted_paths}
@@ -858,7 +922,7 @@ class MusicDuplicatesView(QWidget):
             start_message=(
                 f"🌐 Forzando refresh online para {len(selected)} pista(s)..."
                 if force_refresh
-                else f"🌐 Iniciando busqueda online para {len(selected)} pista(s)..."
+                else f"🌐 Iniciando búsqueda online para {len(selected)} pista(s)..."
             ),
         )
 
@@ -878,7 +942,7 @@ class MusicDuplicatesView(QWidget):
     def show_selected_track_diagnostics(self) -> None:
         track = self._selected_library_track()
         if not track:
-            QMessageBox.information(self, "Diagnostico", "Selecciona una pista primero")
+            QMessageBox.information(self, "Diagnóstico", "Selecciona una pista primero")
             return
         show_lookup_diagnostics_dialog(self, str(track.get("file_path") or ""))
 
@@ -923,6 +987,9 @@ class MusicDuplicatesView(QWidget):
             self.library_columns_btn.setEnabled(True)
             self.library_reset_view_btn.setEnabled(True)
             self._lookup_worker = None
+        if hasattr(self, "cancel_lookup_btn"):
+            self.cancel_lookup_btn.setVisible(busy)
+            self.cancel_lookup_btn.setEnabled(busy)
         self.lookup_status_label.setText(message)
         if self._scan_busy:
             self.scan_btn.setEnabled(False)
@@ -1151,7 +1218,7 @@ class MusicDuplicatesView(QWidget):
     def edit_selected_metadata(self):
         selected = self._get_selected_tracks()
         if not selected:
-            QMessageBox.information(self, "Edicion", "Selecciona una pista")
+            QMessageBox.information(self, "Edición", "Selecciona una pista")
             return
         self._edit_track_metadata(Path(selected[0]["file_path"]))
 
@@ -1168,18 +1235,14 @@ class MusicDuplicatesView(QWidget):
         return
 
     def _persist_music_state(self):
-        from src.utils.app_config import AppConfig
-
-        app_config = AppConfig()
+        app_config = self.app_config
         app_config.set_music_last_folder(
             self.current_folder or self.path_input.text().strip()
         )
         app_config.set_music_recursive(self.recursive_cb.isChecked())
 
     def _apply_saved_column_widths(self):
-        from src.utils.app_config import AppConfig
-
-        widths = AppConfig().get_music_library_column_widths()
+        widths = self.app_config.get_music_library_column_widths()
         if widths and any(width > 0 for width in widths):
             for index, width in enumerate(widths[: self.library_table.columnCount()]):
                 self.library_table.setColumnWidth(index, width)
@@ -1189,12 +1252,10 @@ class MusicDuplicatesView(QWidget):
                     self.library_table.setColumnWidth(index, default_width)
 
     def _restore_library_header_state(self):
-        from src.utils.app_config import AppConfig
-
         header = self.library_table.horizontalHeader()
         if header is None:
             return
-        order = AppConfig().get_music_library_column_order()
+        order = self.app_config.get_music_library_column_order()
         if not order:
             order = list(self.LIBRARY_COLUMN_DEFAULT_ORDER)
         if len(order) < self.library_table.columnCount():
@@ -1223,8 +1284,6 @@ class MusicDuplicatesView(QWidget):
     def _save_library_header_state(self, *args):
         if self._restoring_library_header:
             return
-        from src.utils.app_config import AppConfig
-
         header = self.library_table.horizontalHeader()
         if header is None:
             return
@@ -1235,8 +1294,8 @@ class MusicDuplicatesView(QWidget):
             ]
         except Exception:
             return
-        AppConfig().set_music_library_column_order(order)
-        AppConfig().set_music_library_header_state(
+        self.app_config.set_music_library_column_order(order)
+        self.app_config.set_music_library_header_state(
             ",".join(str(value) for value in order)
         )
 
@@ -1246,9 +1305,7 @@ class MusicDuplicatesView(QWidget):
         self._apply_saved_visible_columns()
 
     def _apply_saved_visible_columns(self):
-        from src.utils.app_config import AppConfig
-
-        visible_columns = set(AppConfig().get_music_library_visible_columns())
+        visible_columns = set(self.app_config.get_music_library_visible_columns())
         if not visible_columns:
             visible_columns = set(self.LIBRARY_DEFAULT_VISIBLE_COLUMNS)
         visible_columns.update({self.LIBRARY_SELECT_COLUMN, self.LIBRARY_FILE_COLUMN})
@@ -1256,8 +1313,6 @@ class MusicDuplicatesView(QWidget):
             self.library_table.setColumnHidden(index, index not in visible_columns)
 
     def _save_visible_columns(self):
-        from src.utils.app_config import AppConfig
-
         visible_columns = [
             index
             for index in range(self.library_table.columnCount())
@@ -1267,24 +1322,20 @@ class MusicDuplicatesView(QWidget):
             visible_columns.insert(0, self.LIBRARY_SELECT_COLUMN)
         if self.LIBRARY_FILE_COLUMN not in visible_columns:
             visible_columns.insert(1, self.LIBRARY_FILE_COLUMN)
-        AppConfig().set_music_library_visible_columns(sorted(set(visible_columns)))
+        self.app_config.set_music_library_visible_columns(sorted(set(visible_columns)))
 
     def _restore_library_splitter_sizes(self):
-        from src.utils.app_config import AppConfig
-
         if not hasattr(self, "library_splitter"):
             return
         sizes = self._normalize_library_splitter_sizes(
-            AppConfig().get_music_library_splitter_sizes()
+            self.app_config.get_music_library_splitter_sizes()
         )
         self.library_splitter.setSizes(sizes)
 
     def _save_library_splitter_sizes(self, *args):
-        from src.utils.app_config import AppConfig
-
         if not hasattr(self, "library_splitter"):
             return
-        AppConfig().set_music_library_splitter_sizes(
+        self.app_config.set_music_library_splitter_sizes(
             self._normalize_library_splitter_sizes(self.library_splitter.sizes())
         )
         self._rerender_cover_preview_label(getattr(self, "library_cover_label", None))
@@ -1345,19 +1396,33 @@ class MusicDuplicatesView(QWidget):
         else:
             self._checked_library_paths.discard(file_path)
 
-    def _save_column_widths(self):
-        if self._restoring_library_header:
-            return
-        from src.utils.app_config import AppConfig
+    @property
+    def app_config(self):
+        if self._app_config is None:
+            from src.utils.app_config import get_app_config
+            self._app_config = get_app_config()
+        return self._app_config
 
+    def _current_column_widths(self) -> list[int]:
         header = self.library_table.horizontalHeader()
-        widths = [
+        return [
             header.sectionSize(i)
             if header is not None
             else self.library_table.columnWidth(i)
             for i in range(self.library_table.columnCount())
         ]
-        AppConfig().set_music_library_column_widths(widths)
+
+    def _save_column_widths(self, *args):
+        if self._restoring_library_header or not self.isVisible():
+            # Durante la construcción (o con la vista oculta) los anchos son
+            # los restaurados o los del layout inicial: no hay nada que guardar.
+            return
+        self._column_widths_timer.start()
+
+    def _flush_column_widths(self):
+        widths = self._current_column_widths()
+        if widths != self.app_config.get_music_library_column_widths():
+            self.app_config.set_music_library_column_widths(widths)
 
     def _reset_table_layout(self):
         header = self.library_table.horizontalHeader()

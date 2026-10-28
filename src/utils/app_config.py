@@ -26,11 +26,12 @@ class AppConfig:
     DEFAULT_CONFIG = {
         "interface": {
             "font_size": 13,
-            "theme": "🌞 Claro Elegante",  # Tema por defecto (nombre unificado con themes.py)
+            "theme": "🌞 Claro Elegante",  # Nombre heredado; el aspecto lo decide theme_mode
             "theme_mode": "system",
             "accent_color": "#0078D4",
             "density": "comfortable",
             "ui_advanced_mode": False,
+            "last_page": "home",  # última página visitada (se restaura al abrir)
         },
         "categories": {"auto_save": True, "backup_enabled": True},
         "analysis": {
@@ -44,7 +45,15 @@ class AppConfig:
             "recent_paths": [],
             "conflict_policy": "rename",
         },
-        "duplicates": {"ignored_hashes": [], "preferred_originals": {}},
+        "duplicates": {
+            "ignored_hashes": [],
+            "preferred_originals": {},
+            "default_method": "hybrid",
+            "keep_rule": "newest",
+            "preferred_folders": [],
+            "verify_bytes_before_delete": False,
+            "similar_images_threshold": 10,
+        },
         "audio": {
             "enabled": True,
             "library_roots": [],
@@ -63,6 +72,8 @@ class AppConfig:
             "duplicate_policy": "review",
             "organization_template": "MUSICA/{album_artist}/{year} - {album}/{disc_number}-{track_number} - {title}",
             "acoustid_api_key": "",
+            "duplicate_duration_tolerance": 2.0,
+            "local_chromaprint": True,
         },
         "health": {
             "temperature": {"cool_min": 40, "moderate": 65, "high": 75, "critical": 85},
@@ -74,9 +85,21 @@ class AppConfig:
             "cycles_bands": {"moderate": 2000, "high": 10000},
             "weights": {"temp": 0.35, "tbw": 0.35, "hours": 0.20, "cycles": 0.10},
         },
+        "disks": {
+            "smart_cache_ttl": 120,  # segundos que se reutiliza una lectura SMART
+            "smart_timeout": 20,  # segundos por consulta a smartctl
+            "smart_history": True,  # historial diario en smart_history.db
+        },
+        "space_usage": {
+            "size_on_disk": True,  # tamaño en disco además del lógico
+            "dedupe_hardlinks": True,  # contar una sola vez los hardlinks
+        },
     }
 
-    def __init__(self, config_file: str = "app_config.json"):
+    def __init__(self, config_file: Optional[str] = None):
+        if config_file is None:
+            from src.utils.paths import user_data_file
+            config_file = user_data_file("app_config.json")
         self.config_file = Path(config_file)
         self.config = self.load_config()
 
@@ -610,3 +633,24 @@ class AppConfig:
 
             error(f"Error importando configuración: {e}")
             return False
+
+
+_shared_config: Optional[AppConfig] = None
+
+
+def get_app_config() -> AppConfig:
+    """Instancia única de configuración del proceso.
+
+    La ventana registra la suya con ``set_app_config``; los módulos que no
+    reciben una inyectada usan esta en lugar de crear (y releer) otra.
+    """
+    global _shared_config
+    if _shared_config is None:
+        _shared_config = AppConfig()
+    return _shared_config
+
+
+def set_app_config(config: Optional[AppConfig]) -> None:
+    """Registra la configuración viva (o la olvida con ``None``)."""
+    global _shared_config
+    _shared_config = config

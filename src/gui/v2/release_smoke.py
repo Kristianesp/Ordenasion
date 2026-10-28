@@ -12,7 +12,7 @@ from unittest.mock import patch
 from src.utils.version import APP_VERSION
 
 
-def run_smoke(start_window):
+def run_smoke(start_window, dispose_window=None):
     original_cwd = Path.cwd()
     temporary = Path(tempfile.mkdtemp(prefix="ordenasion-release-smoke-"))
     target = os.environ.get("ORDENASION_SMOKE_REPORT")
@@ -32,7 +32,8 @@ def run_smoke(start_window):
                 from PyQt6.QtWidgets import QApplication
                 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
                 from src.gui.v2.startup_splash import BRANDING_DIR, ICON_PATH, BACKGROUND_PATH, startup_font_family
-                from src.gui.main_window import FileOrganizerGUI
+                from src.gui.v2.app_window import FluentAppWindow
+                from src.gui.organize_controller import OrganizeController
                 from src.core.disk_manager import DiskManager
                 from src.core.audio_index import audio_metadata_service
                 from src.core.audio_fingerprint import audio_fingerprint_service
@@ -56,9 +57,10 @@ def run_smoke(start_window):
                 report["qt_multimedia"] = bool(QMediaPlayer and QAudioOutput)
                 denied = AssertionError("Servicio externo no permitido durante smoke")
                 with contextlib.ExitStack() as guards:
-                    guards.enter_context(patch.object(FileOrganizerGUI, "_init_disk_manager", lambda self: None))
-                    guards.enter_context(patch.object(FileOrganizerGUI, "_refresh_disk_viewer_after_theme", lambda *_: None))
-                    guards.enter_context(patch.object(FileOrganizerGUI, "start_analysis", side_effect=denied))
+                    guards.enter_context(patch.object(FluentAppWindow, "_init_disk_manager", lambda self: None))
+                    # Se niega el worker (no el método de la página: sus señales lo enlazan
+                    # al construirse y un MagicMock enlazado como slot sobrevive al patch).
+                    guards.enter_context(patch.object(OrganizeController, "start_analysis", side_effect=denied))
                     guards.enter_context(patch.object(DiskManager, "get_all_disks", side_effect=denied))
                     guards.enter_context(patch.object(audio_metadata_service, "update_track_tags", side_effect=denied))
                     guards.enter_context(patch.object(audio_fingerprint_service, "get_or_lookup_online_metadata", side_effect=denied))
@@ -83,7 +85,8 @@ def run_smoke(start_window):
                             assert not window.windowIcon().isNull()
                             assert app.applicationVersion() == APP_VERSION
                             assert APP_VERSION in window.windowTitle()
-                            assert window._routes["disks"].space_page._worker is None
+                            disks_page = window.built_page("disks")
+                            assert disks_page is None or disks_page.space_page._worker is None
                             assert not window.grab().isNull()
                             report["first_frame"] = True
                             report["routes"] = list(window._routes)
@@ -119,6 +122,9 @@ def run_smoke(start_window):
                     window._startup_splash.close()
                     if window.isVisible():
                         window.close()
+                    if dispose_window is not None:
+                        dispose_window(window)
+                        report["disposed"] = True
     finally:
         os.chdir(original_cwd)
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

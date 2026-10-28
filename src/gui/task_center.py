@@ -10,10 +10,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
-    QLabel,
-    QListWidget,
     QListWidgetItem,
-    QPushButton,
     QTextEdit,
     QVBoxLayout,
 )
@@ -23,6 +20,8 @@ class BackgroundTaskRegistry(QObject):
     """Registro compartido de tareas en segundo plano."""
 
     tasks_updated = pyqtSignal()
+    task_started = pyqtSignal(str, str)  # id, título
+    task_finished = pyqtSignal(str, str, str)  # id, título, estado final
 
     def __init__(self):
         super().__init__()
@@ -42,6 +41,7 @@ class BackgroundTaskRegistry(QObject):
             "last_message": "",
             "cancel_callback": cancel_callback,
         }
+        self.task_started.emit(task_id, title)
         self.tasks_updated.emit()
 
     def update_task(self, task_id: str, message: str):
@@ -57,6 +57,7 @@ class BackgroundTaskRegistry(QObject):
             return
         task["status"] = status
         task["ended_at"] = datetime.now()
+        self.task_finished.emit(task_id, task["title"], status)
         self.tasks_updated.emit()
 
     def cancel_task(self, task_id: str):
@@ -70,6 +71,12 @@ class BackgroundTaskRegistry(QObject):
             callback()
         task["status"] = "Cancelación solicitada"
         self.tasks_updated.emit()
+
+    ACTIVE_STATUSES = frozenset({"En progreso", "Cancelación solicitada"})
+
+    def active_count(self) -> int:
+        """Número de tareas que siguen en marcha."""
+        return sum(task["status"] in self.ACTIVE_STATUSES for task in self._tasks.values())
 
     def get_tasks(self) -> list[tuple[str, dict]]:
         return list(self._tasks.items())
@@ -89,32 +96,45 @@ class TaskCenterDialog(QDialog):
     def __init__(self, parent=None, registry: BackgroundTaskRegistry = task_registry):
         super().__init__(parent)
         self.registry = registry
-        self.setWindowTitle("🧵 Centro de tareas")
-        self.resize(640, 420)
+        self.setObjectName("taskCenterDialog")
+        self.setWindowTitle("Centro de tareas")
+        self.resize(680, 440)
         self._build_ui()
         self.registry.tasks_updated.connect(self.refresh)
         self.refresh()
+        from src.gui.v2.theme import apply_dialog_surface
+
+        apply_dialog_surface(self)
 
     def _build_ui(self):
+        from qfluentwidgets import BodyLabel, FluentIcon, ListWidget, PrimaryPushButton, PushButton, TitleLabel
+
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Tareas en segundo plano, duración y último estado."))
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+        layout.addWidget(TitleLabel("Tareas"))
+        layout.addWidget(BodyLabel("Tareas en segundo plano, duración y último estado."))
 
         body = QHBoxLayout()
-        self.task_list = QListWidget()
+        body.setSpacing(12)
+        self.task_list = ListWidget()
+        self.task_list.setAccessibleName("Tareas en segundo plano")
         self.task_list.currentItemChanged.connect(self._render_details)
         body.addWidget(self.task_list, 1)
 
         self.details = QTextEdit()
+        self.details.setAccessibleName("Detalle de la tarea")
         self.details.setReadOnly(True)
         body.addWidget(self.details, 1)
         layout.addLayout(body, 1)
 
         actions = QHBoxLayout()
-        self.cancel_btn = QPushButton("⛔ Cancelar tarea")
+        actions.setSpacing(12)
+        self.cancel_btn = PushButton(FluentIcon.CANCEL, "Cancelar tarea")
         self.cancel_btn.clicked.connect(self.cancel_selected_task)
         actions.addWidget(self.cancel_btn)
         actions.addStretch()
-        close_btn = QPushButton("Cerrar")
+        close_btn = PrimaryPushButton("Cerrar")
         close_btn.clicked.connect(self.accept)
         actions.addWidget(close_btn)
         layout.addLayout(actions)
@@ -135,16 +155,20 @@ class TaskCenterDialog(QDialog):
             self.task_list.setCurrentRow(0)
         elif self.task_list.count() == 0:
             self.details.setPlainText("No hay tareas registradas.")
+            self.cancel_btn.setEnabled(False)
 
     def _render_details(self, current, previous):
         if not current:
             self.details.setPlainText("No hay tarea seleccionada.")
+            self.cancel_btn.setEnabled(False)
             return
         task_id = current.data(256)
         task = self.registry.get_task(task_id)
         if not task:
             self.details.setPlainText("No hay datos disponibles.")
+            self.cancel_btn.setEnabled(False)
             return
+        self.cancel_btn.setEnabled(task["status"] == "En progreso" and callable(task.get("cancel_callback")))
         self.details.setPlainText(
             "\n".join(
                 [

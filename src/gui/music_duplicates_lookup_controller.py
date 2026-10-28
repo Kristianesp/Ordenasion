@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QMessageBox
 
 from src.core.audio_fingerprint import audio_fingerprint_service
 from src.gui.music_duplicates_workers import AudioLookupWorker
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 
 
 def start_lookup_for_tracks(
@@ -25,14 +25,14 @@ def start_lookup_for_tracks(
         QMessageBox.information(
             view,
             "Metadatos",
-            "Ya hay una busqueda online en curso",
+            "Ya hay una búsqueda online en curso",
         )
         return
-    if not AppConfig().get_audio_online_metadata_enabled():
+    if not get_app_config().get_audio_online_metadata_enabled():
         QMessageBox.information(
             view,
             "Metadatos",
-            "Los metadatos online estan desactivados en Configuracion.",
+            "Los metadatos online están desactivados en Configuración.",
         )
         return
     view._lookup_request_token += 1
@@ -41,7 +41,7 @@ def start_lookup_for_tracks(
     view._set_lookup_busy(
         True,
         start_message
-        or f"🌐 Iniciando busqueda online para {len(selected)} pista(s)...",
+        or f"🌐 Iniciando búsqueda online para {len(selected)} pista(s)...",
     )
 
     view._lookup_worker = AudioLookupWorker(selected, force_refresh=force_refresh)
@@ -60,6 +60,9 @@ def start_lookup_for_tracks(
     )
     view._lookup_worker.error_occurred.connect(
         lambda error, token=request_token: on_lookup_error(view, token, error)
+    )
+    view._lookup_worker.cancelled.connect(
+        lambda token=request_token, paths=selected_paths: on_lookup_cancelled(view, token, paths)
     )
     view._lookup_worker.start()
 
@@ -130,14 +133,14 @@ def on_lookup_finished(view: Any, token: int, selected_paths: list[str]) -> None
     view._show_selected_candidate_preview()
     view._set_lookup_busy(
         False,
-        f"🌐 Busqueda online completada: {len(results)} pista(s) | auto={auto_changed} | variantes={len(variant_targets)} | pendientes={pending_single_targets}",
+        f"🌐 Búsqueda online completada: {len(results)} pista(s) | auto={auto_changed} | variantes={len(variant_targets)} | pendientes={pending_single_targets}",
     )
     if auto_messages:
-        message = "🤖 Se ha seleccionado automaticamente: " + "; ".join(
+        message = "🤖 Se ha seleccionado automáticamente: " + "; ".join(
             auto_messages[:3]
         )
         if len(auto_messages) > 3:
-            message += f"; +{len(auto_messages) - 3} mas"
+            message += f"; +{len(auto_messages) - 3} más"
         view.lookup_status_label.setText(message)
         view._show_music_toast(message, duration_ms=2000)
         view.status_update.emit(message)
@@ -146,4 +149,12 @@ def on_lookup_finished(view: Any, token: int, selected_paths: list[str]) -> None
 def on_lookup_error(view: Any, token: int, error: str) -> None:
     if token != view._lookup_active_token:
         return
-    view._set_lookup_busy(False, f"❌ Error en busqueda online: {error}")
+    view._set_lookup_busy(False, f"❌ Error en búsqueda online: {error}")
+
+
+def on_lookup_cancelled(view: Any, token: int, selected_paths: list[str]) -> None:
+    if token != view._lookup_active_token:
+        return
+    view.refresh_library()
+    view._restore_selected_file_paths(selected_paths)
+    view._set_lookup_busy(False, "⏹ Búsqueda online cancelada; los resultados obtenidos se conservan.")

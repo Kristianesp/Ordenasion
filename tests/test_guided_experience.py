@@ -78,45 +78,54 @@ def test_settings_never_reports_success_after_failed_save(tmp_path, monkeypatch)
     assert "color válido" in page.validation_label.text()
 
 
+def _organize_page(tmp_path, controller):
+    """Página Organizar real con configuración y categorías temporales."""
+    from src.core.category_manager import CategoryManager
+    from src.gui.v2.pages import organize_page as module
+
+    application()
+    profiles = SimpleNamespace(get_profile_names=lambda: [], get_active_profile=lambda: None)
+    page = module.OrganizePage(AppConfig(str(tmp_path / "config.json")), controller,
+                               CategoryManager(str(tmp_path / "categories.json")), profiles)
+    # Sin análisis automático al escribir la ruta (temporizador de 1 s)
+    page.config.set_auto_analyze(False)
+    page._notify = MagicMock()
+    page._alert = MagicMock()
+    return module, page
+
+
 @pytest.mark.parametrize("accepted", [False, True])
 def test_review_confirms_selection_exactly_once(tmp_path, monkeypatch, accepted):
-    from src.gui import main_window as module
-    application()
+    from src.core.transaction_manager import TransactionManager
+    from src.gui import organize_controller
     selected = [{"file": tmp_path / "selected.txt", "category": "TEXTOS"}]
     preview = MagicMock()
     preview.exec.return_value = QDialog.DialogCode.Accepted if accepted else QDialog.DialogCode.Rejected
     preview.get_conflict_policy.return_value = "skip"
     preview_factory = MagicMock(return_value=preview)
-    monkeypatch.setattr(module, "PreviewDialog", preview_factory)
     worker = MagicMock()
     worker_factory = MagicMock(return_value=worker)
-    monkeypatch.setattr(module, "OrganizeWorker", worker_factory)
-    monkeypatch.setattr(module.task_registry, "start_task", MagicMock())
-    facade = SimpleNamespace(
-        _get_effective_selected_movements=lambda: ([], selected),
-        folder_input=SimpleNamespace(text=lambda: str(tmp_path)),
-        organize_by_date_checkbox=SimpleNamespace(isChecked=lambda: False),
-        check_duplicates_checkbox=SimpleNamespace(isChecked=lambda: False),
-        app_config=AppConfig(str(tmp_path / "config.json")),
-        current_organize_task_id=None, _active_workers=[],
-        current_analysis_task_id=None,
-        _analysis_result_path=os.path.normcase(os.path.realpath(tmp_path)),
-        organize_btn=MagicMock(), rollback_btn=MagicMock(), operation_state_changed=MagicMock(),
-        log_message=MagicMock(), _handle_task_progress=MagicMock(),
-        on_organize_complete=MagicMock(), on_rollback_available=MagicMock(),
-        on_operation_summary_ready=MagicMock(), _cleanup_worker=MagicMock(),
-    )
-    module.FileOrganizerGUI.start_organization(facade)
+    monkeypatch.setattr(organize_controller, "OrganizeWorker", worker_factory)
+    monkeypatch.setattr(organize_controller.task_registry, "start_task", MagicMock())
+    controller = organize_controller.OrganizeController(TransactionManager(str(tmp_path / "ops.jsonl")))
+    module, page = _organize_page(tmp_path, controller)
+    monkeypatch.setattr(module, "PreviewDialog", preview_factory)
+    monkeypatch.setattr(page, "_get_effective_selected_movements", lambda: ([], selected))
+    page.folder_input.setText(str(tmp_path))
+    page._analysis_result_path = os.path.normcase(os.path.realpath(tmp_path))
+    page.start_organization()
     if accepted:
-        module.FileOrganizerGUI.start_organization(facade)
+        page.start_organization()
         preview_factory.assert_called_once()
+        assert preview_factory.call_args.args[1] == selected
         worker_factory.assert_called_once()
         assert worker_factory.call_args.args[2] == selected
         assert worker_factory.call_args.kwargs["conflict_policy"] == "skip"
         worker.start.assert_called_once()
+        assert page.organize_btn.text() == "Organizando…" and not page.organize_btn.isEnabled()
     else:
         worker_factory.assert_not_called()
-        assert facade.current_organize_task_id is None
+        assert controller.current_organize_task_id is None
 
 
 def test_preview_accounts_for_conflicts_between_selected_files(tmp_path):
@@ -136,25 +145,25 @@ def test_preview_accounts_for_conflicts_between_selected_files(tmp_path):
 
 
 def test_changed_folder_cannot_review_old_selection(tmp_path, monkeypatch):
-    from src.gui import main_window as module
-    application()
     other = tmp_path / "other"
     other.mkdir()
-    warning = MagicMock()
-    monkeypatch.setattr(module.QMessageBox, "warning", warning)
+    controller = SimpleNamespace(busy=False)
     preview_factory = MagicMock()
+    from src.gui.v2.pages import organize_page as module
     monkeypatch.setattr(module, "PreviewDialog", preview_factory)
     facade = SimpleNamespace(
-        current_organize_task_id=None, current_analysis_task_id=None,
+        controller=controller, _organization_review_open=False, _notify=MagicMock(),
         folder_input=SimpleNamespace(text=lambda: str(other)),
         _analysis_result_path=os.path.normcase(os.path.realpath(tmp_path)),
     )
-    module.FileOrganizerGUI.start_organization(facade)
+    facade._matches_analysis = lambda: module.OrganizePage._matches_analysis(facade)
+    module.OrganizePage.start_organization(facade)
     preview_factory.assert_not_called()
-    warning.assert_called_once()
-    facade.current_analysis_task_id = "running"
+    facade._notify.assert_called_once()
+    assert facade._notify.call_args.args[:2] == ("warning", "Analiza la carpeta actual")
+    controller.busy = True
     facade._analysis_result_path = os.path.normcase(os.path.realpath(other))
-    module.FileOrganizerGUI.start_organization(facade)
+    module.OrganizePage.start_organization(facade)
     preview_factory.assert_not_called()
 
 
@@ -276,8 +285,10 @@ def test_summary_editor_renders_dark_surface_and_readable_text(tmp_path):
     assert contrast_ratio(viewport.palette().color(QPalette.ColorRole.Text).name(),
                           viewport.palette().color(QPalette.ColorRole.Base).name()) >= 4.5
     bright_text_pixels = sum(
-        rendered.pixelColor(x, y).lightness() > 200
+        rendered.pixelColor(x, y).lightness() > 150
         for y in range(min(180, rendered.height())) for x in range(rendered.width())
     )
+    # El antialiasing varía por plataforma; basta con que haya texto claro
+    # visible sobre la superficie oscura (lightness ~40).
     assert bright_text_pixels > 100
     dialog.close()

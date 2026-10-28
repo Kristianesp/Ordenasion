@@ -1,5 +1,77 @@
 # Cambios de Ordenasion
 
+## 4.0.0 — 2026-10-28
+
+1. **Organizar, ahora Fluent nativo:** la página deja de envolver la ventana
+   antigua (`main_window.py` desaparece). Mantiene todas las funciones y añade
+   orden por columna, arrastrar carpetas, política de conflictos en opciones
+   avanzadas y diálogos de vista previa, resumen, tareas y reglas con aspecto
+   nativo.
+2. **Deshacer de verdad:** funciona en la sesión y tras reiniciar. Historial
+   persistente en Actividad con «Deshacer» por operación. Nunca sobrescribe un
+   origen ocupado, borra las carpetas que creó y no repite lo ya revertido.
+3. **Organización más segura:**
+   - «Organizar por fecha» ya no falla.
+   - Cancelar o terminar con errores se informa como tal.
+   - Cargar un perfil no borra las rutas protegidas.
+   - Las carpetas de categoría no se reorganizan.
+   - Una sola carpeta `VARIOS`.
+   - Las reglas personalizadas se respetan.
+   - Se ignoran `desktop.ini`, `Thumbs.db` y `~$*`, y no se siguen junctions.
+   - La vista previa y la ejecución comparten un único plan.
+4. **Duplicados fiables:**
+   - «Híbrido», que confirma con hash, es el modo por defecto.
+   - Nunca se retiran todas las copias de un grupo.
+   - Las carpetas de cuarentena y ocultas se excluyen.
+   - Los hardlinks no cuentan como duplicados.
+   - Música: ya no agrupa pistas sin etiquetas o ilegibles; compara la duración
+     con tolerancia y usa Chromaprint local cuando hace falta.
+5. **Duplicados, novedades:**
+   - Reglas para elegir qué copia conservar.
+   - Sustituir copias por hardlinks.
+   - Verificación byte a byte.
+   - Imágenes parecidas (dHash).
+   - Exportar el plan a CSV.
+   - Cancelación real.
+6. **Salud SMART correcta:**
+   - Cada letra se asocia a su disco físico real.
+   - El código de retorno de smartctl se interpreta como máscara de bits, así
+     que los discos que fallan ya no salen «sin datos».
+   - Temperatura, horas y TB escritos se leen de campos normalizados.
+   - Hay salud también para HDD sin TBW y para NVMe.
+   - Nada de smartctl en el hilo de la interfaz.
+   - Historial con alertas de sectores, atributos críticos y «Reintentar como
+     administrador».
+7. **Uso del espacio:** tamaño en disco frente a lógico, desglose por extensión,
+   CSV, reanálisis de subcarpeta, «Organizar esta carpeta» y un tercio de memoria
+   por nodo. Inicio y Discos muestran el mismo porcentaje.
+8. **Más rápido:**
+   - Construir la ventana tarda ~0,6 s, antes ~1,75 s.
+   - Cambiar de tema tarda ~0,2 s, antes ~0,85 s.
+   - Música, Duplicados y Discos se cargan al abrirlas.
+   - Una sola configuración en memoria.
+   - El registro de operaciones es JSONL: 100.000 operaciones en menos de 1 s.
+   - La caché de hashes es unas 50 veces más rápida.
+9. **Shell:**
+   - Los atajos funcionan y F1 muestra la ayuda.
+   - Tema «Sistema» que sigue a Windows.
+   - Insignia de tareas activas, aviso al terminar y progreso en la barra de
+     tareas.
+   - Recuerda la última página.
+   - «Abrir en el Explorador».
+   - Estados vacíos con acción.
+   - Nuevas preferencias en Configuración.
+10. **Datos y mantenimiento:**
+    - Configuración, cachés y registros en `%LOCALAPPDATA%\Ordenasion`, con
+      copia automática desde la ubicación antigua.
+    - Un solo sistema de temas, sin código muerto (~3.300 líneas menos).
+    - Dependencias acotadas.
+    - CI con GitHub Actions y 299 tests.
+
+La lógica específica de Windows (mapeo de discos, UAC, tipos de unidad, tamaño en
+disco, barra de tareas) está probada con simulaciones; requiere validación en
+equipos Windows reales antes de publicar el ejecutable.
+
 ## 3.5.0 — 2026-09-27
 
 1. **Inicio operativo:** dashboard con ocupación disponible, último análisis de

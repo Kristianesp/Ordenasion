@@ -28,7 +28,7 @@ def app():
 
 def test_entrypoint_import_is_lightweight_and_read_only(tmp_path):
     repo = Path(main_fluent.__file__).resolve().parent
-    script = f"import sys;sys.path.insert(0,{str(repo)!r});import main_fluent;assert 'src.gui.main_window' not in sys.modules;assert 'qfluentwidgets' not in sys.modules"
+    script = f"import sys;sys.path.insert(0,{str(repo)!r});import main_fluent;assert 'src.gui.v2.app_window' not in sys.modules;assert 'src.gui.v2.pages.organize_page' not in sys.modules;assert 'qfluentwidgets' not in sys.modules"
     completed = subprocess.run([sys.executable, "-B", "-c", script], cwd=tmp_path, capture_output=True, text=True,
                                env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, timeout=20)
     assert completed.returncode == 0, completed.stderr
@@ -111,6 +111,7 @@ def test_early_window_close_also_cleans_up(app):
 
 def test_startup_shows_splash_before_factory_and_failure_closes_it(app, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ORDENASION_DATA_DIR", str(tmp_path))
     seen = []
     original = module.FluentStartupSplash
 
@@ -135,6 +136,7 @@ def test_startup_shows_splash_before_factory_and_failure_closes_it(app, tmp_path
 
 def test_successful_startup_uses_saved_theme_and_application_icon(app, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ORDENASION_DATA_DIR", str(tmp_path))
     path = tmp_path / "app_config.json"
     path.write_text(json.dumps({"interface": {"theme_mode": "dark"}}), encoding="utf-8")
     content = path.read_bytes()

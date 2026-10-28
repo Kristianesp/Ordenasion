@@ -16,8 +16,15 @@ datas = [
 binaries = [(str(project_root / "bin" / name), "bin")
             for name in ("smartctl.exe", "fpcalc.exe") if (project_root / "bin" / name).is_file()]
 # Hooks oficiales de Qt/WMI reúnen sus recursos transitivos; nada de collect_all.
+# Las páginas y diálogos que se importan bajo demanda (dentro de funciones)
+# se declaran también aquí: la página Organizar es nativa y ya no existe la
+# ventana heredada que los arrastraba al arrancar.
+lazy_gui_modules = ["src.gui.v2.pages.organize_page", "src.gui.v2.pages.organize_support",
+                    "src.gui.v2.pages.feature_pages", "src.gui.config_dialog", "src.gui.rule_panel",
+                    "src.gui.operation_summary_dialog", "src.gui.preview_dialog", "src.gui.task_center",
+                    "src.gui.disk_viewer", "src.gui.music_duplicates_view", "src.gui.duplicates_dashboard"]
 hiddenimports = ["PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets", "PyQt6.QtMultimedia",
-                 "PyQt6.sip", "psutil", "wmi", "mutagen"]
+                 "PyQt6.sip", "psutil", "wmi", "mutagen", *lazy_gui_modules]
 excluded_modules = ["matplotlib", "numpy", "reportlab", "schedule", "torch",
                     "PyQt6.QtWebEngineCore", "PyQt6.QtWebEngineWidgets", "PyQt6.QtCharts", "pytest"]
 

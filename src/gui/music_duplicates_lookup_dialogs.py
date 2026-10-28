@@ -30,11 +30,11 @@ def show_lookup_diagnostics_dialog(view: Any, file_path: str | Path) -> None:
         return
     dialog = QDialog(view)
     dialog.setObjectName("musicLookupDiagnosticsDialog")
-    dialog.setWindowTitle(f"Diagnostico lookup - {Path(str(file_path)).name}")
+    dialog.setWindowTitle(f"Diagnóstico lookup - {Path(str(file_path)).name}")
     dialog.resize(860, 620)
     layout = QVBoxLayout(dialog)
     info = QLabel(
-        "Diagnostico completo del lookup online, candidatos, cache y variante seleccionada."
+        "Diagnóstico completo del lookup online, candidatos, cache y variante seleccionada."
     )
     info.setWordWrap(True)
     layout.addWidget(info)

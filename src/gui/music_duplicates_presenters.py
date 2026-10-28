@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Helpers puros de presentacion para la vista musical."""
+"""Helpers puros de presentación para la vista musical."""
 
 from __future__ import annotations
 
@@ -79,11 +79,11 @@ def build_duplicate_preview_block(
             f"Recomendacion: {recommendation}",
             f"Archivo: {file_path.name}",
             f"Ruta: {file_path}",
-            f"Titulo: {metadata.get('title') or file_path.stem}",
+            f"Título: {metadata.get('title') or file_path.stem}",
             f"Artista: {metadata.get('artist') or metadata.get('album_artist') or '-'}",
             f"Album: {metadata.get('album') or '-'}",
             f"Calidad: {format_quality(metadata)}",
-            f"Duracion: {format_duration(metadata.get('duration'))}",
+            f"Duración: {format_duration(metadata.get('duration'))}",
             f"Codec: {metadata.get('codec') or '-'}",
             f"Bitrate: {format_bitrate(metadata.get('bitrate'))}",
         ]
@@ -109,7 +109,7 @@ def build_library_detail_text(
         f"Ruta: {file_path}",
         "",
         "Metadatos locales",
-        f"- Titulo: {current.get('title') or '-'}",
+        f"- Título: {current.get('title') or '-'}",
         f"- Artista: {current.get('artist') or current.get('album_artist') or '-'}",
         f"- Album: {current.get('album') or '-'}",
         f"- Año: {current.get('year') or '-'}",
@@ -130,8 +130,8 @@ def build_library_detail_text(
                 "Sugerencia online",
                 f"- Fuente: {lookup.get('source', '-') or '-'}",
                 f"- Confianza: {lookup.get('confidence', 0)}",
-                f"- Diagnostico: {lookup_reason_text or diagnostics.get('acoustid_reason', '-') or '-'}",
-                f"- Titulo sugerido: {suggested.get('title', '-') or '-'}",
+                f"- Diagnóstico: {lookup_reason_text or diagnostics.get('acoustid_reason', '-') or '-'}",
+                f"- Título sugerido: {suggested.get('title', '-') or '-'}",
                 f"- Artista sugerido: {suggested.get('artist', '-') or '-'}",
                 f"- Album sugerido: {suggested.get('album', '-') or '-'}",
                 f"- Año sugerido: {suggested.get('year', '-') or '-'}",
@@ -147,7 +147,7 @@ def build_library_detail_text(
             [
                 "",
                 "Sugerencia online",
-                "- Sin lookup cargado todavia para esta pista.",
+                "- Sin lookup cargado todavía para esta pista.",
             ]
         )
     return "\n".join(lines)

@@ -27,7 +27,7 @@ from src.gui.music_duplicates_lookup_dialogs import (
     prompt_cover_choice,
     show_lookup_diagnostics_dialog,
 )
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 from src.gui.v2.theme import apply_dialog_surface, apply_menu_surface
 
 
@@ -128,7 +128,7 @@ def edit_library_columns(view: Any) -> None:
     checkbox_map: dict[int, QCheckBox] = {}
     for index, label in enumerate(view.LIBRARY_COLUMN_LABELS):
         if index == view.LIBRARY_SELECT_COLUMN:
-            label = "Seleccion"
+            label = "Selección"
         checkbox = QCheckBox(label)
         checkbox.setChecked(not view.library_table.isColumnHidden(index))
         if index in {view.LIBRARY_SELECT_COLUMN, view.LIBRARY_FILE_COLUMN}:
@@ -164,7 +164,7 @@ def lookup_results_for_tracks(
             ordered.append(cached)
         elif fetch_missing:
             missing.append(track)
-    if missing and AppConfig().get_audio_online_metadata_enabled():
+    if missing and get_app_config().get_audio_online_metadata_enabled():
         fetched = audio_fingerprint_service.build_batch_suggestions(missing)
         for item in fetched:
             view._store_lookup_result(item.get("file_path", ""), item, persist=True)

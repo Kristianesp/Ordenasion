@@ -5,12 +5,54 @@ Maneja la lógica de categorías, extensiones y operaciones CRUD
 """
 
 import json
+import mimetypes
 import re
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set
 from pathlib import Path
 from datetime import datetime
 
-from src.utils.constants import CATEGORIAS, VARIOS_FOLDER
+from src.utils.constants import CATEGORIAS, VARIOS_CATEGORY, VARIOS_FOLDER
+from src.utils.logger import warn
+
+
+# Heurísticas por nombre cuando ni la extensión ni el tipo MIME deciden
+_NAME_TOKENS = {
+    "MUSICA": ("track", "album", "song", "mix", "audio"),
+    "VIDEOS": ("movie", "trailer", "video", "clip", "episode"),
+    "IMAGENES": ("img", "screenshot", "photo", "wallpaper", "camera"),
+    "DOCUMENTOS": ("invoice", "report", "manual", "doc", "cv", "resume", "readme"),
+    "CODIGO": ("package", "docker", "config", "script", "source", "setup"),
+}
+
+
+def guess_category(file_path: Path, ext_to_categoria: Dict[str, str]) -> str:
+    """Categoriza por extensión, después por MIME, por nombre y, si no, VARIOS."""
+    extension = file_path.suffix.lower()
+    category = ext_to_categoria.get(extension)
+    if category:
+        return category
+
+    guessed_type, _ = mimetypes.guess_type(file_path.name)
+    if guessed_type:
+        top_level_type = guessed_type.split("/", 1)[0]
+        if top_level_type == "audio":
+            return "MUSICA"
+        if top_level_type == "video":
+            return "VIDEOS"
+        if top_level_type == "image":
+            return "IMAGENES"
+        if any(
+            token in guessed_type
+            for token in ("pdf", "word", "sheet", "presentation", "json", "xml")
+        ):
+            return "DOCUMENTOS"
+
+    filename = file_path.name.lower()
+    for guessed_category, tokens in _NAME_TOKENS.items():
+        if any(token in filename for token in tokens):
+            return guessed_category
+
+    return VARIOS_CATEGORY
 
 
 class CategoryRule:
@@ -23,29 +65,39 @@ class CategoryRule:
         self.priority = priority
         self.enabled = True
         self.created_date = datetime.now()
+        self._compiled_for: Optional[str] = None
+        self._compiled = None
+
+    def _compiled_pattern(self):
+        """Compila la regex una sola vez (se recompila si cambia el patrón)."""
+        if self._compiled_for != self.pattern:
+            self._compiled_for = self.pattern
+            try:
+                self._compiled = re.compile(self.pattern[6:], re.IGNORECASE)
+            except re.error as exc:
+                warn(f"Regla '{self.name}' con regex inválida: {exc}")
+                self._compiled = None
+        return self._compiled
 
     def matches(self, file_path: Path) -> bool:
         """Verifica si el archivo coincide con esta regla"""
         if not self.enabled:
             return False
 
-        try:
-            # Compilar patrón si es regex
-            if self.pattern.startswith('regex:'):
-                pattern = self.pattern[6:]  # Quitar prefijo 'regex:'
-                compiled_pattern = re.compile(pattern, re.IGNORECASE)
-                return bool(compiled_pattern.search(str(file_path)))
-            else:
-                # Búsqueda simple por nombre
-                return self.pattern.lower() in file_path.name.lower()
-        except:
-            return False
+        if self.pattern.startswith('regex:'):
+            compiled_pattern = self._compiled_pattern()
+            return bool(compiled_pattern and compiled_pattern.search(str(file_path)))
+        # Búsqueda simple por nombre
+        return self.pattern.lower() in file_path.name.lower()
 
 
 class CategoryManager:
     """Gestor principal de categorías y extensiones"""
 
-    def __init__(self, config_file: str = "categories_config.json"):
+    def __init__(self, config_file: Optional[str] = None):
+        if config_file is None:
+            from src.utils.paths import user_data_file
+            config_file = str(user_data_file("categories_config.json"))
         self.config_file = config_file
         self.categories = CATEGORIAS.copy()
         self.ext_to_categoria = self._create_reverse_index()
@@ -232,7 +284,7 @@ class CategoryManager:
                         if 'created_date' in rule_data:
                             try:
                                 rule.created_date = datetime.fromisoformat(rule_data['created_date'])
-                            except:
+                            except (TypeError, ValueError):
                                 pass
                         self.custom_rules.append(rule)
 
@@ -241,8 +293,8 @@ class CategoryManager:
                     self.nested_categories = config_data['nested_categories']
 
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            warn(f"No se pudo cargar la configuración de categorías: {exc}")
 
         # Si no se puede cargar, usar valores por defecto
         self.categories = CATEGORIAS.copy()
@@ -252,17 +304,72 @@ class CategoryManager:
     def get_varios_folder(self) -> str:
         """Retorna el nombre de la carpeta para archivos no categorizados"""
         return VARIOS_FOLDER
-    
+
+    def get_category_folder(self, category: str) -> str:
+        """Carpeta relativa de una categoría (respeta categorías anidadas)."""
+        from src.core.organization_conflicts import category_to_folder
+
+        return category_to_folder(category, self.nested_categories)
+
+    def get_category_folder_names(self) -> Set[str]:
+        """Nombres de carpetas de categoría de primer nivel (para excluirlas al reanalizar)."""
+        from src.core.organization_plan import known_category_folder_names
+
+        categories = list(self.categories.keys())
+        for children in self.nested_categories.values():
+            categories.extend(children or [])
+        categories.extend(rule.category for rule in self.custom_rules)
+        return known_category_folder_names(categories, self.get_category_folder)
+
+    def _sorted_rules(self) -> List[CategoryRule]:
+        key = tuple((id(rule), rule.priority, rule.enabled) for rule in self.custom_rules)
+        if getattr(self, "_rules_cache_key", None) != key:
+            self._rules_cache_key = key
+            self._rules_cache = [
+                rule
+                for rule in sorted(self.custom_rules, key=lambda r: r.priority, reverse=True)
+                if rule.enabled
+            ]
+        return self._rules_cache
+
     def categorize_file(self, file_path: Path) -> str:
-        """Categoriza un archivo usando reglas personalizadas y extensión"""
+        """Categoriza un archivo: reglas personalizadas, extensión, MIME y nombre.
+
+        Es la única implementación de categorización; el análisis de
+        "Organizar" delega aquí.
+        """
+        file_path = Path(file_path)
         # Primero verificar reglas personalizadas (ordenadas por prioridad)
-        for rule in sorted(self.custom_rules, key=lambda r: r.priority, reverse=True):
+        for rule in self._sorted_rules():
             if rule.matches(file_path):
                 return rule.category
 
-        # Si no hay reglas personalizadas, usar categorización por extensión
-        extension = file_path.suffix.lower()
-        return self.ext_to_categoria.get(extension, "VARIOS")
+        return guess_category(file_path, self.ext_to_categoria)
+
+    def get_custom_rules(self) -> List[CategoryRule]:
+        """Reglas personalizadas configuradas"""
+        return list(self.custom_rules)
+
+    def update_custom_rule(self, original_name: str, name: str, pattern: str, category: str, priority: int = 0) -> bool:
+        """Actualiza una regla existente"""
+        for rule in self.custom_rules:
+            if rule.name == original_name:
+                rule.name = name
+                rule.pattern = pattern
+                rule.category = category
+                rule.priority = priority
+                self.save_configuration()
+                return True
+        return False
+
+    def toggle_custom_rule(self, name: str) -> bool:
+        """Activa o desactiva una regla"""
+        for rule in self.custom_rules:
+            if rule.name == name:
+                rule.enabled = not rule.enabled
+                self.save_configuration()
+                return True
+        return False
 
     def add_custom_rule(self, name: str, pattern: str, category: str, priority: int = 0) -> bool:
         """Añade una regla personalizada de categorización"""

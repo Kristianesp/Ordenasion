@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 
 from src.core.audio_fingerprint import audio_fingerprint_service
 from src.core.audio_index import audio_metadata_service
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 from src.gui.v2.theme import apply_dialog_surface
 from src.gui.music_duplicates_lookup_dialogs import (
     prompt_cover_choice,
@@ -70,7 +70,7 @@ def edit_track_metadata(view: Any, target: Path) -> None:
     right_layout.addStretch()
 
     file_info = QLabel(
-        f"Archivo: {target.name}\nRuta: {target}\nCodec: {current.get('codec') or '-'} | Duracion: {view._format_duration(current.get('duration'))} | Calidad: {view._format_quality(current)}"
+        f"Archivo: {target.name}\nRuta: {target}\nCodec: {current.get('codec') or '-'} | Duración: {view._format_duration(current.get('duration'))} | Calidad: {view._format_quality(current)}"
     )
     file_info.setWordWrap(True)
     form.addRow(file_info)
@@ -93,7 +93,7 @@ def edit_track_metadata(view: Any, target: Path) -> None:
         year_edit,
         genre_edit,
     ]
-    form.addRow("Titulo", title_edit)
+    form.addRow("Título", title_edit)
     form.addRow("Artista", artist_edit)
     form.addRow("Album", album_edit)
     form.addRow("Album artist", album_artist_edit)
@@ -178,7 +178,7 @@ def edit_track_metadata(view: Any, target: Path) -> None:
         chosen_index = selected_variant_index(variants_table)
         if chosen_index is None or not (0 <= chosen_index < len(candidates)):
             variant_details.setPlainText(
-                "Haz una busqueda online y selecciona una variante para ver su detalle."
+                "Haz una búsqueda online y selecciona una variante para ver su detalle."
             )
             use_variant_btn.setEnabled(False)
             return
@@ -247,9 +247,9 @@ def edit_track_metadata(view: Any, target: Path) -> None:
         update_dialog_variant_details()
 
     def lookup_from_dialog() -> None:
-        if not AppConfig().get_audio_online_metadata_enabled():
+        if not get_app_config().get_audio_online_metadata_enabled():
             dialog_lookup_status.setText(
-                "La busqueda online esta desactivada en Configuracion."
+                "La búsqueda online esta desactivada en Configuración."
             )
             return
         result = audio_fingerprint_service.get_or_lookup_online_metadata(
@@ -264,7 +264,7 @@ def edit_track_metadata(view: Any, target: Path) -> None:
         view._restore_selected_file_paths([str(target)], str(target))
         view._update_library_detail_panel()
         view.lookup_status_label.setText(
-            f"Busqueda online manual para editor: {target.name} | fuente={result.get('source', 'unknown')} | confianza={result.get('confidence', 0)}"
+            f"Búsqueda online manual para editor: {target.name} | fuente={result.get('source', 'unknown')} | confianza={result.get('confidence', 0)}"
         )
 
     def mark_dialog_no_match() -> None:
@@ -302,7 +302,7 @@ def edit_track_metadata(view: Any, target: Path) -> None:
     else:
         variants_box.setVisible(False)
         variant_details.setPlainText(
-            "Haz una busqueda online para ver variantes aqui mismo."
+            "Haz una búsqueda online para ver variantes aquí mismo."
         )
         refresh_dialog_suggestion(initial_lookup)
         update_dialog_cover(initial_lookup)

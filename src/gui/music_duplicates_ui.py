@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -22,7 +21,6 @@ from PyQt6.QtWidgets import (
     QSlider,
     QSplitter,
     QTableWidget,
-    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -30,6 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.gui.music_duplicates_constants import DUPLICATES_COLUMN_LABELS
+from src.gui.music_library_table import LibraryTableView
 from src.gui.v2.theme import apply_control_size
 
 
@@ -133,7 +132,7 @@ def build_duplicates_tab(view: Any) -> QWidget:
     dup_right.addWidget(view.duplicates_table, 1)
 
     view.best_duplicate_hint = QLabel(
-        "La mejor copia sugerida se resaltara al analizar duplicados."
+        "La mejor copia sugerida se resaltará al analizar duplicados."
     )
     view.best_duplicate_hint.setWordWrap(True)
     dup_right.addWidget(view.best_duplicate_hint)
@@ -150,8 +149,14 @@ def build_duplicates_tab(view: Any) -> QWidget:
 def build_metadata_tab(view: Any) -> QWidget:
     meta_tab = QWidget()
     meta_layout = QVBoxLayout(meta_tab)
-    meta_box = QGroupBox("Enriquecimiento de metadatos")
+    # Sin QGroupBox: la página ya es una tarjeta (no anidar cajas con título flotante)
+    meta_box = QWidget()
+    meta_box.setObjectName("musicMetadataPanel")
     meta_box_layout = QVBoxLayout(meta_box)
+    meta_box_layout.setContentsMargins(0, 8, 0, 0)
+    meta_title = QLabel("Enriquecimiento de metadatos")
+    meta_title.setObjectName("musicSectionTitle")
+    meta_box_layout.addWidget(meta_title)
     meta_top = QHBoxLayout()
     view.refresh_missing_btn = QPushButton("Buscar faltantes")
     view.refresh_missing_btn.clicked.connect(view.refresh_missing_metadata)
@@ -165,10 +170,14 @@ def build_metadata_tab(view: Any) -> QWidget:
     view.apply_all_btn = QPushButton("Aplicar lote")
     view.apply_all_btn.clicked.connect(view.apply_batch_metadata)
     meta_top.addWidget(view.apply_all_btn)
+    view.cancel_lookup_btn = QPushButton("Cancelar búsqueda")
+    view.cancel_lookup_btn.setVisible(False)
+    view.cancel_lookup_btn.clicked.connect(view.cancel_lookup)
+    meta_top.addWidget(view.cancel_lookup_btn)
     meta_top.addStretch()
     meta_box_layout.addLayout(meta_top)
     view.missing_count_label = QLabel("Pistas con metadatos incompletos: 0")
-    view.lookup_status_label = QLabel("Busqueda online: sin ejecutar.")
+    view.lookup_status_label = QLabel("Búsqueda online: sin ejecutar.")
     view.lookup_status_label.setWordWrap(True)
     view.lookup_progress = QProgressBar()
     view.lookup_progress.setVisible(False)
@@ -192,8 +201,10 @@ def build_metadata_tab(view: Any) -> QWidget:
     metadata_layout.addWidget(meta_box)
     metadata_layout.addStretch()
 
-    library_box = QGroupBox("Biblioteca musical")
+    library_box = QWidget()
+    library_box.setObjectName("musicLibraryPanel")
     library_layout = QVBoxLayout(library_box)
+    library_layout.setContentsMargins(0, 8, 0, 0)
     library_top = QHBoxLayout()
     library_top.addWidget(QLabel("Estado"))
     view.library_filter_combo = QComboBox()
@@ -211,7 +222,7 @@ def build_metadata_tab(view: Any) -> QWidget:
     library_top.addWidget(view.library_filter_combo)
     view.library_search_input = QLineEdit()
     view.library_search_input.setPlaceholderText(
-        "Filtrar por archivo, titulo, artista..."
+        "Filtrar por archivo, título, artista..."
     )
     view.library_search_input.textChanged.connect(view._on_library_filter_changed)
     library_top.addWidget(view.library_search_input, 1)
@@ -225,9 +236,15 @@ def build_metadata_tab(view: Any) -> QWidget:
     view.edit_meta_btn.clicked.connect(lambda: view.tabs.setCurrentWidget(view.metadata_panel))
     library_top.addWidget(view.edit_meta_btn)
     library_top.addStretch()
+    view.library_count_label = QLabel("")
+    view.library_count_label.setToolTip("Pistas mostradas / pistas indexadas")
+    library_top.addWidget(view.library_count_label)
     library_layout.addLayout(library_top)
-    view.library_table = QTableWidget(0, len(view.LIBRARY_COLUMN_LABELS))
-    view.library_table.setHorizontalHeaderLabels(view.LIBRARY_COLUMN_LABELS)
+    view.library_table = LibraryTableView(
+        list(view.LIBRARY_COLUMN_LABELS),
+        select_column=view.LIBRARY_SELECT_COLUMN,
+        file_column=view.LIBRARY_FILE_COLUMN,
+    )
     view.library_table.setSortingEnabled(True)
     view.library_table.setSelectionBehavior(
         view.library_table.SelectionBehavior.SelectRows
@@ -265,8 +282,6 @@ def build_metadata_tab(view: Any) -> QWidget:
     view.library_splitter = QSplitter(Qt.Orientation.Horizontal)
     view.library_splitter.setHandleWidth(12)
     view.library_splitter.setChildrenCollapsible(False)
-    view.library_splitter.setCollapsible(0, False)
-    view.library_splitter.setCollapsible(1, False)
     view.library_splitter.addWidget(view.library_table)
     view.library_table.setMinimumWidth(360)
     view.library_table.setSizePolicy(
@@ -316,7 +331,7 @@ def build_metadata_tab(view: Any) -> QWidget:
     seek_row.addWidget(view.library_time_label)
     library_detail_layout.addLayout(detail_player_row)
     library_detail_layout.addLayout(seek_row)
-    view.library_player_hint = QLabel("Selecciona una pista para escucharla aqui.")
+    view.library_player_hint = QLabel("Selecciona una pista para escucharla aquí.")
     view.library_player_hint.setWordWrap(True)
     library_detail_layout.addWidget(view.library_player_hint)
     detail_actions_layout = QVBoxLayout()
@@ -382,10 +397,10 @@ def build_metadata_tab(view: Any) -> QWidget:
         "Selecciona manualmente otra portada disponible"
     )
     actions_grid.addWidget(view.library_cover_choice_btn, 1, 0)
-    view.library_diagnostics_btn = QPushButton("Ver diagnostico")
+    view.library_diagnostics_btn = QPushButton("Ver diagnóstico")
     view.library_diagnostics_btn.clicked.connect(view.show_selected_track_diagnostics)
     view.library_diagnostics_btn.setToolTip(
-        "Muestra el diagnostico completo del lookup online"
+        "Muestra el diagnóstico completo del lookup online"
     )
     actions_grid.addWidget(view.library_diagnostics_btn, 1, 1)
     for button in (
@@ -423,6 +438,18 @@ def build_metadata_tab(view: Any) -> QWidget:
     view.library_splitter.splitterMoved.connect(view._save_library_splitter_sizes)
     view._restore_library_splitter_sizes()
     library_layout.addWidget(view.library_splitter, 1)
+    from qfluentwidgets import FluentIcon
+    from src.gui.v2.components import EmptyState
+
+    view.library_empty_state = EmptyState(
+        FluentIcon.MUSIC,
+        "Tu biblioteca está vacía. Elige una carpeta de música y pulsa «Analizar audio».",
+        "Elegir carpeta",
+        primary=False,
+    )
+    view.library_empty_state.action_requested.connect(view._browse)
+    view.library_empty_state.hide()
+    library_layout.addWidget(view.library_empty_state, 1)
     view.library_bottom_scroll = QScrollBar(Qt.Orientation.Horizontal)
     view.library_bottom_scroll.valueChanged.connect(
         view._on_library_bottom_scroll_changed

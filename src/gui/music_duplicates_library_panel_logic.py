@@ -56,9 +56,9 @@ def sync_library_playback_rate(view: Any, persist: bool = False) -> None:
 
     if persist:
         try:
-            from src.utils.app_config import AppConfig
+            from src.utils.app_config import get_app_config
 
-            AppConfig().set_music_preview_playback_rate(playback_rate)
+            get_app_config().set_music_preview_playback_rate(playback_rate)
         except Exception:
             pass
 
@@ -73,7 +73,7 @@ def update_library_detail_panel(view: Any) -> None:
             "Selecciona una pista de la biblioteca para ver detalle local y sugerido."
         )
         view._set_cover_preview(view.library_cover_label, None)
-        view.library_player_hint.setText("Selecciona una pista para escucharla aqui.")
+        view.library_player_hint.setText("Selecciona una pista para escucharla aquí.")
         view._set_library_expected_duration(0)
         view.library_refresh_cache_btn.setEnabled(False)
         view.library_clear_cache_btn.setEnabled(False)
@@ -290,7 +290,7 @@ def on_audio_playback_state_changed(view: Any, state: Any) -> None:
                 )
         else:
             view.library_player_hint.setText(
-                "Selecciona una pista para escucharla aqui."
+                "Selecciona una pista para escucharla aquí."
             )
     elif view._audio_context != "library":
         view.library_play_btn.setText("Reproducir")
@@ -354,9 +354,9 @@ def stop_library_preview(view: Any) -> None:
         view.library_player_hint.setText(
             f"Lista para reproducir: {file_path.name}"
             if file_path is not None
-            else "Selecciona una pista para escucharla aqui."
+            else "Selecciona una pista para escucharla aquí."
         )
-        view.status_update.emit("⏹ Reproduccion detenida")
+        view.status_update.emit("⏹ Reproducción detenida")
 
 
 def seek_library_preview(view: Any, position: int) -> None:
@@ -399,7 +399,7 @@ def clear_selected_track_cache(view: Any) -> None:
         return
     view._lookup_results_by_path.pop(str(file_path), None)
     if audio_metadata_service.clear_lookup_cache(file_path):
-        view.lookup_status_label.setText(f"🧹 Cache online limpiada: {file_path.name}")
+        view.lookup_status_label.setText(f"Cache online limpiada: {file_path.name}")
         view.status_update.emit(f"🧹 Cache online limpiada: {file_path.name}")
         view.refresh_library()
         view._restore_selected_file_paths([str(file_path)], str(file_path))

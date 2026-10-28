@@ -1,14 +1,20 @@
 """Componentes compartidos de la interfaz Fluent 2.0."""
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF
+from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal, QRectF
 from PyQt6.QtGui import QPainter, QLinearGradient, QPen
-from PyQt6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     CardWidget,
     IconWidget,
+    InfoBar,
+    InfoBarPosition,
+    LineEdit,
+    MessageBox,
+    MessageBoxBase,
     PrimaryPushButton,
+    PushButton,
     SubtitleLabel,
     TitleLabel,
     TransparentToolButton,
@@ -16,6 +22,24 @@ from qfluentwidgets import (
 
 from src.gui.v2.theme import _config_from_widget, current_tokens, current_glass, glass_color
 from qfluentwidgets.window.fluent_window import FluentTitleBarButton
+
+
+PAGE_VIEWPORT_QSS = "QWidget#qt_scrollarea_viewport { background-color: transparent; }"
+
+
+def page_content_qss(content: QWidget) -> str:
+    return f"QWidget#{content.objectName()} {{ background-color: transparent; }}"
+
+
+def prepare_page_surface(page, content: QWidget) -> None:
+    """Deja la página transparente sobre el fondo del shell antes de crear hijos.
+
+    Son las mismas hojas que pone el shell al estilizar la página; aplicadas
+    aquí, con el árbol aún vacío, el shell no tiene que repulir la página.
+    """
+    page.setStyleSheet("")
+    page.viewport().setStyleSheet(PAGE_VIEWPORT_QSS)
+    content.setStyleSheet(page_content_qss(content))
 
 
 class ThemeTitleBarButton(FluentTitleBarButton):
@@ -218,3 +242,167 @@ class FeatureCard(GlassCard):
         layout.addLayout(text_layout, 1)
 
         self.clicked.connect(self.activated.emit)
+
+
+class EmptyState(QWidget):
+    """Estado vacío común: icono, una frase y, opcionalmente, una acción principal."""
+
+    action_requested = pyqtSignal()
+
+    def __init__(self, icon, text: str, action_text: str = "", parent=None, primary: bool = True):
+        super().__init__(parent)
+        self.setObjectName("emptyState")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 24, 16, 24)
+        layout.setSpacing(10)
+        layout.addStretch(1)
+        self.icon_widget = IconWidget(icon)
+        self.icon_widget.setFixedSize(40, 40)
+        layout.addWidget(self.icon_widget, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.text_label = BodyLabel(text)
+        self.text_label.setWordWrap(True)
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        self.text_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        layout.addWidget(self.text_label)
+        button_class = PrimaryPushButton if primary else PushButton
+        self.action_button = button_class()
+        self.action_button.setText(action_text)
+        self.action_button.setAccessibleName(action_text or "Acción")
+        self.action_button.setVisible(bool(action_text))
+        self.action_button.clicked.connect(self.action_requested.emit)
+        layout.addWidget(self.action_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addStretch(1)
+
+    def set_text(self, text: str) -> None:
+        self.text_label.setText(text)
+
+    def set_action(self, action_text: str) -> None:
+        self.action_button.setText(action_text)
+        self.action_button.setAccessibleName(action_text or "Acción")
+        self.action_button.setVisible(bool(action_text))
+
+
+class ShortcutsDialog(MessageBoxBase):
+    """Ayuda de atajos de teclado (F1), con el estilo de los diálogos Fluent."""
+
+    def __init__(self, shortcuts, parent=None):
+        super().__init__(parent)
+        self.setObjectName("shortcutsDialog")
+        title = SubtitleLabel("Atajos de teclado")
+        self.viewLayout.addWidget(title)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(6)
+        self.rows = []
+        for row, (sequence, description) in enumerate(shortcuts):
+            key = BodyLabel(sequence)
+            key.setObjectName("shortcutKey")
+            key.setStyleSheet("font-weight: 600;")
+            text = BodyLabel(description)
+            grid.addWidget(key, row, 0)
+            grid.addWidget(text, row, 1)
+            self.rows.append((sequence, description))
+        self.viewLayout.addLayout(grid)
+        self.yesButton.setText("Cerrar")
+        self.cancelButton.hide()
+        self.widget.setMinimumWidth(420)
+
+
+class TextPromptDialog(MessageBoxBase):
+    """Petición de un texto (p. ej. el nombre de un perfil) con estilo Fluent."""
+
+    def __init__(self, title: str, label: str, text: str = "", parent=None):
+        super().__init__(parent)
+        self.setObjectName("textPromptDialog")
+        self.viewLayout.addWidget(SubtitleLabel(title))
+        self.viewLayout.addWidget(BodyLabel(label))
+        self.input = LineEdit()
+        self.input.setText(text)
+        self.input.selectAll()
+        self.input.setClearButtonEnabled(True)
+        self.input.setAccessibleName(label)
+        self.viewLayout.addWidget(self.input)
+        self.yesButton.setText("Guardar")
+        self.cancelButton.setText("Cancelar")
+        self.widget.setMinimumWidth(380)
+        self.input.setFocus()
+
+    def validate(self) -> bool:
+        return bool(self.input.text().strip())
+
+    @classmethod
+    def get_text(cls, parent, title: str, label: str, text: str = "") -> tuple[str, bool]:
+        dialog = cls(title, label, text, parent)
+        accepted = bool(dialog.exec())
+        return dialog.input.text().strip(), accepted
+
+
+def ask(parent, title: str, content: str, yes_text: str = "Sí", no_text: str = "No") -> bool:
+    """Pregunta Fluent bloqueante; True si se confirma."""
+    box = MessageBox(title, content, parent)
+    box.yesButton.setText(yes_text)
+    box.cancelButton.setText(no_text)
+    return bool(box.exec())
+
+
+def alert(parent, title: str, content: str) -> None:
+    """Aviso Fluent bloqueante, para errores que no deben pasar inadvertidos."""
+    box = MessageBox(title, content, parent)
+    box.yesButton.setText("Aceptar")
+    box.cancelButton.hide()
+    box.exec()
+
+
+def notify(parent, level: str, title: str, content: str) -> None:
+    """Aviso no bloqueante (InfoBar) en la esquina superior derecha."""
+    show = getattr(InfoBar, level, InfoBar.info)
+    show(title, content, position=InfoBarPosition.TOP_RIGHT, parent=parent,
+         duration=6000 if level in ("warning", "error") else 3500)
+
+
+def local_folder_from_mime(mime) -> str | None:
+    """Primera carpeta local de un arrastre (None si no hay ninguna)."""
+    from pathlib import Path
+
+    if mime is None or not mime.hasUrls():
+        return None
+    for url in mime.urls():
+        if url.isLocalFile():
+            path = Path(url.toLocalFile())
+            if path.is_dir():
+                return str(path)
+    return None
+
+
+class FolderDropFilter(QObject):
+    """Acepta carpetas locales arrastradas sobre una página y llama a ``callback``.
+
+    Se instala en la página y, si es un área de desplazamiento, en su
+    viewport (que es quien recibe los eventos de arrastre).
+    """
+
+    def __init__(self, target: QWidget, callback, parent=None):
+        super().__init__(parent or target)
+        self._callback = callback
+        self.targets = [target]
+        viewport = getattr(target, "viewport", None)
+        if callable(viewport) and viewport() is not None:
+            self.targets.append(viewport())
+        for widget in self.targets:
+            widget.setAcceptDrops(True)
+            widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+            if local_folder_from_mime(event.mimeData()):
+                event.acceptProposedAction()
+                return True
+        elif kind == QEvent.Type.Drop:
+            folder = local_folder_from_mime(event.mimeData())
+            if folder:
+                event.acceptProposedAction()
+                self._callback(folder)
+                return True
+        return super().eventFilter(obj, event)

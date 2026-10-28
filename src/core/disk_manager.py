@@ -1,32 +1,90 @@
 #!/usr/bin/env python3
 """
-Gestor de Discos y Particiones para el Organizador de Archivos
-Maneja la información del sistema, análisis de espacio y gestión segura de unidades
+Gestor de Discos y Particiones para el Organizador de Archivos.
+
+Responsabilidades:
+- Enumerar volúmenes (psutil) con tipo de unidad (fijo, extraíble, red,
+  óptica, RAM) y unidad del sistema según %SystemDrive%.
+- Asociar cada volumen a su disco físico de forma determinista:
+  IOCTL_STORAGE_GET_DEVICE_NUMBER → Get-Partition (PowerShell) → WMI.
+- Consultar SMART (smartctl) con una única caché con TTL, un Future en vuelo
+  por disco y sin tocar nunca el hilo de la interfaz (los llamadores usan
+  ``submit_disk_report`` o un worker).
 """
 
+from __future__ import annotations
+
+import atexit
+import json
+import logging
 import os
-import sys
-import psutil
-import platform
+import re
+import shutil
 import subprocess
-from typing import Dict, List, Optional, Tuple, Any
-from pathlib import Path
-from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
 import threading
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-if platform.system() == "Windows":
-    try:
-        import wmi  # type: ignore
-    except ImportError:
-        wmi = None
+import psutil
 
-# Importar smartctl wrapper para datos SMART reales
-from src.utils.smartctl_wrapper import SmartctlWrapper
-from src.utils.logger import info, warn, error, success, debug, SmartCache
-from src.utils.app_config import AppConfig
-from src.utils.constants import EMOJI, HEALTH_LABELS
 from src.core.health_service import HealthService
+from src.core.smart_history import SmartHistory
+from src.utils.app_config import AppConfig, get_app_config
+from src.utils.formatting import format_bytes
+from src.utils.smartctl_wrapper import CREATE_NO_WINDOW, SmartctlWrapper, SmartQuery, is_user_admin
+
+logger = logging.getLogger(__name__)
+
+try:  # pragma: no cover - sólo Windows
+    import wmi  # type: ignore
+except ImportError:  # pragma: no cover
+    wmi = None
+
+DRIVE_TYPE_LABELS = {
+    "fixed": "Disco fijo",
+    "removable": "Extraíble",
+    "network": "Unidad de red",
+    "optical": "Unidad óptica",
+    "ram": "Disco RAM",
+    "unknown": "Desconocido",
+}
+# Tipos en los que no tiene sentido consultar SMART.
+NO_SMART_TYPES = {"network", "optical", "ram"}
+
+# GetDriveTypeW
+_WIN_DRIVE_TYPES = {2: "removable", 3: "fixed", 4: "network", 5: "optical", 6: "ram"}
+
+IOCTL_STORAGE_GET_DEVICE_NUMBER = 0x002D1080
+NEGATIVE_MAP_TTL = 60.0
+DISKS_SNAPSHOT_TTL = 10.0
+
+
+def usage_percent(total: int, used: int) -> float:
+    """Porcentaje de uso único para toda la aplicación (Inicio y Discos)."""
+    if not total or total <= 0:
+        return 0.0
+    return round(max(0.0, min(100.0, used / total * 100)), 1)
+
+
+def system_drive_letter() -> str:
+    """Letra de la unidad del sistema (%SystemDrive%, no siempre C:)."""
+    value = os.environ.get("SystemDrive") or os.environ.get("SYSTEMDRIVE") or "C:"
+    return value[:1].upper()
+
+
+def drive_letter_of(mountpoint: str) -> str:
+    """Letra sólo si el punto de montaje es la raíz de una unidad (``D:\\``)."""
+    match = re.fullmatch(r"([A-Za-z]):[\\/]?", mountpoint or "")
+    return match.group(1).upper() if match else ""
+
+
+def _normalize(path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
 
 @dataclass
 class DiskInfo:
@@ -41,820 +99,649 @@ class DiskInfo:
     is_system_drive: bool
     is_removable: bool
     drive_letter: str
+    drive_type: str = "fixed"
+    opts: str = ""
+
+    @property
+    def drive_type_label(self) -> str:
+        return DRIVE_TYPE_LABELS.get(self.drive_type, DRIVE_TYPE_LABELS["unknown"])
+
+    @property
+    def smart_applicable(self) -> bool:
+        return self.drive_type not in NO_SMART_TYPES
+
+
+@dataclass
+class DiskReport:
+    """Todo lo que la interfaz necesita de un disco, calculado fuera de la UI."""
+    mountpoint: str
+    disk: Optional[DiskInfo]
+    smart: Optional[Dict[str, Any]] = None
+    health: Dict[str, Any] = field(default_factory=dict)
+    error: Optional[str] = None  # not_applicable | unmapped | unavailable | admin_required | ...
+    messages: List[str] = field(default_factory=list)
+    physical_disk: Optional[int] = None
+    device: Optional[str] = None
+    device_type: Optional[str] = None
+    history: List[Dict[str, Any]] = field(default_factory=list)
+    history_alerts: List[str] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+
+    @property
+    def admin_required(self) -> bool:
+        return self.error == "admin_required"
+
+
+# ---------------------------------------------------------------- Windows
+def win_drive_type(root: str) -> Optional[str]:
+    """GetDriveTypeW; None si no es Windows o falla."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        code = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root))
+    except (AttributeError, OSError):
+        return None
+    return _WIN_DRIVE_TYPES.get(int(code), "unknown")
+
+
+def _win_volume_path(mountpoint: str) -> Optional[str]:
+    """Ruta de dispositivo del volumen: ``\\\\.\\D:`` o el GUID de un montaje en carpeta."""
+    letter = drive_letter_of(mountpoint)
+    if letter:
+        return f"\\\\.\\{letter}:"
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        buffer = ctypes.create_unicode_buffer(64)
+        root = mountpoint if mountpoint.endswith("\\") else mountpoint + "\\"
+        if ctypes.windll.kernel32.GetVolumeNameForVolumeMountPointW(root, buffer, len(buffer)):
+            return buffer.value.rstrip("\\")
+    except (AttributeError, OSError):
+        return None
+    return None
+
+
+def win_device_number(mountpoint: str) -> Optional[int]:
+    """IOCTL_STORAGE_GET_DEVICE_NUMBER sobre el volumen (no requiere administrador)."""
+    if sys.platform != "win32":
+        return None
+    volume = _win_volume_path(mountpoint)
+    if not volume:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                         wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+
+        class STORAGE_DEVICE_NUMBER(ctypes.Structure):
+            _fields_ = [("DeviceType", wintypes.DWORD), ("DeviceNumber", wintypes.DWORD),
+                        ("PartitionNumber", wintypes.DWORD)]
+
+        handle = kernel32.CreateFileW(volume, 0, 0x1 | 0x2, None, 3, 0, None)
+        if not handle or handle == wintypes.HANDLE(-1).value:
+            return None
+        try:
+            number = STORAGE_DEVICE_NUMBER()
+            returned = wintypes.DWORD()
+            ok = kernel32.DeviceIoControl(handle, IOCTL_STORAGE_GET_DEVICE_NUMBER, None, 0,
+                                          ctypes.byref(number), ctypes.sizeof(number),
+                                          ctypes.byref(returned), None)
+            return int(number.DeviceNumber) if ok else None
+        finally:
+            kernel32.CloseHandle(handle)
+    except (AttributeError, OSError) as exc:
+        logger.debug("IOCTL_STORAGE_GET_DEVICE_NUMBER falló para %s: %s", mountpoint, exc)
+        return None
+
+
+def parse_partition_json(stdout: str) -> Dict[str, int]:
+    """Salida JSON de Get-Partition → {'C': 0, 'D': 0, 'E': 1}."""
+    try:
+        data = json.loads(stdout or "null")
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(data, dict):
+        data = [data]
+    mapping: Dict[str, int] = {}
+    for item in data or []:
+        if not isinstance(item, dict):
+            continue
+        letter = item.get("DriveLetter")
+        number = item.get("DiskNumber")
+        if isinstance(letter, int):  # [char] serializado como número
+            letter = chr(letter) if letter > 0 else ""
+        if isinstance(letter, str) and letter.strip("\x00 ") and isinstance(number, int):
+            mapping[letter.strip("\x00 ")[0].upper()] = number
+    return mapping
+
+
+def powershell_partition_map(timeout: float = 15) -> Dict[str, int]:
+    """Get-Partition | Select DriveLetter, DiskNumber (sólo Windows)."""
+    if sys.platform != "win32":
+        return {}
+    executable = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not executable:
+        return {}
+    script = ("Get-Partition | Where-Object { $_.DriveLetter } | "
+              "Select-Object @{n='DriveLetter';e={[string]$_.DriveLetter}},DiskNumber | "
+              "ConvertTo-Json -Compress")
+    try:
+        result = subprocess.run(
+            [executable, "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, creationflags=CREATE_NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.debug("Get-Partition falló: %s", exc)
+        return {}
+    return parse_partition_json(result.stdout) if result.returncode == 0 else {}
+
+
+def summarize_top_level(path: str, max_items: int = 10000) -> Dict[str, Any]:
+    """Resumen rápido del primer nivel de una carpeta (para el panel de Discos).
+
+    Se ejecuta siempre en un hilo de trabajo; nunca recorre subcarpetas.
+    """
+    from datetime import datetime, timedelta
+
+    summary: Dict[str, Any] = {"total_files": 0, "total_dirs": 0, "total_size": 0, "file_types": {},
+                               "large_files": [], "recent_files_count": 0, "old_files_count": 0,
+                               "analysis_limit_reached": False}
+    now = datetime.now().timestamp()
+    week_ago = now - timedelta(days=7).total_seconds()
+    month_ago = now - timedelta(days=30).total_seconds()
+    count = 0
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if count >= max_items:
+                    summary["analysis_limit_reached"] = True
+                    break
+                count += 1
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        summary["total_dirs"] += 1
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                summary["total_files"] += 1
+                summary["total_size"] += info.st_size
+                ext = os.path.splitext(entry.name)[1].lower() or "sin_extension"
+                summary["file_types"][ext] = summary["file_types"].get(ext, 0) + 1
+                if info.st_size > 100 * 1024 * 1024:
+                    summary["large_files"].append({"name": entry.name, "size": info.st_size, "path": entry.path})
+                if info.st_mtime > week_ago:
+                    summary["recent_files_count"] += 1
+                elif info.st_mtime < month_ago:
+                    summary["old_files_count"] += 1
+    except OSError as exc:
+        logger.debug("No se pudo resumir %s: %s", path, exc)
+        return {}
+    summary["large_files"] = sorted(summary["large_files"], key=lambda item: item["size"], reverse=True)[:10]
+    return summary
 
 
 class DiskManager:
     """Gestor principal de discos y particiones del sistema"""
-    
-    def __init__(self):
+
+    def __init__(self, app_config: Optional[AppConfig] = None, smartctl: Optional[SmartctlWrapper] = None,
+                 history: Optional[SmartHistory] = None):
         self.safe_mode = True  # Por defecto en modo seguro (solo lectura)
-        self._disks_cache = None
-        self._last_scan_time = 0
-        self._drive_map = None  # --- CAMBIO ---: Inicia como None para lazy loading
-        self._smart_cache = SmartCache(ttl_seconds=30)  # Cache con TTL de 30 segundos
-        self.app_config = AppConfig()
+        self.app_config = app_config or get_app_config()
         self.health_service = HealthService(self.app_config)
-        self._executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="smartctl")
-        self._lock = threading.Lock()
-        
-        # Inicializar smartctl wrapper para datos SMART lifetime
-        self.smartctl = SmartctlWrapper()
-        if self.smartctl.is_available():
-            success("smartctl disponible - Se usarán datos SMART reales lifetime")
-        else:
-            warn("smartctl no disponible - Se usarán datos psutil como fallback")
-        
-        # --- CAMBIO ---: Eliminada toda la inicialización de WMI de __init__
-        self.wmi_service = None # Inicia como None
-    
-    def __del__(self):
-        """Limpia recursos al destruir la instancia"""
-        if hasattr(self, '_executor'):
-            self._executor.shutdown(wait=False)
+        disks_cfg = self.app_config.get("disks", {}) or {}
+        self.smart_ttl = float(disks_cfg.get("smart_cache_ttl", 120))
+        self.smart_timeout = float(disks_cfg.get("smart_timeout", 20))
+        self._history_enabled = bool(disks_cfg.get("smart_history", True))
+        self.history = history if history is not None else (SmartHistory() if self._history_enabled else None)
 
-    # --- CAMBIO ---: Nuevo método thread-safe para obtener/crear el mapa WMI
-    def _get_or_create_drive_map(self) -> Dict[str, str]:
-        """
-        Obtiene el mapeo WMI (lógico a físico), creándolo si no existe.
-        Este método es thread-safe usando self._lock.
-        """
-        # 1. Comprobación rápida sin bloqueo
-        if self._drive_map is not None:
-            return self._drive_map
-        
-        # 2. Si no existe, usar el cerrojo para crearlo
-        with self._lock:
-            # 3. Doble comprobación (quizás otro hilo lo creó mientras este esperaba)
-            if self._drive_map is not None:
-                return self._drive_map
-            
-            info("Inicializando WMI y creando mapeo de unidades por primera vez (lazy load)...")
-            
-            if platform.system() != "Windows" or not wmi:
-                warn("WMI no disponible o no es Windows. Mapeo de discos físicos desactivado.")
-                self._drive_map = {} # Cachear el fallo
-                return self._drive_map
-
-            try:
-                import time
-                time.sleep(0.5)  # Esperar a que el sistema esté listo
-                self.wmi_service = wmi.WMI()
-                success("WMI service inicializado (lazy load)")
-                drive_map = self._map_logical_to_physical_drives()
-                self._drive_map = drive_map
-                return self._drive_map
-            
-            except Exception as e:
-                error(f"Error al inicializar WMI (lazy load): {e}")
-                info("Reintentando inicialización WMI (lazy load)...")
-                try:
-                    import time
-                    time.sleep(2)  # Esperar más tiempo
-                    self.wmi_service = wmi.WMI()
-                    success("WMI service inicializado en segundo intento (lazy load)")
-                    drive_map = self._map_logical_to_physical_drives()
-                    self._drive_map = drive_map
-                    return self._drive_map
-                except Exception as e2:
-                    error(f"Error crítico final al inicializar WMI (lazy load): {e2}")
-                    self.wmi_service = None
-                    self._drive_map = {} # Cachear el fallo definitivo
-                    return self._drive_map
-    
-    def _map_drives_with_smartctl_only(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Mapea letras de unidad a discos físicos usando SOLO smartctl (sin WMI)
-        Usa smartctl --scan, tamaño de disco y datos SMART para mapeo preciso
-        """
-        drive_map = {}
-        
+        self._disks_cache: Optional[List[DiskInfo]] = None
+        self._disks_cache_time = 0.0
+        self._lock = threading.RLock()
+        # mountpoint normalizado -> (número de disco o None, instante)
+        self._drive_map: Dict[str, Tuple[Optional[int], float]] = {}
+        self._partition_map: Optional[Dict[str, int]] = None
+        self._wmi_map: Optional[Dict[str, str]] = None
+        self._scan: Optional[List[Dict[str, Any]]] = None
+        # Caché única de informes SMART: clave de disco -> (DiskReport, instante)
+        self._reports: Dict[str, Tuple[DiskReport, float]] = {}
+        self._inflight: Dict[str, Future] = {}
+        # Consultas smartctl por disco físico: varias letras comparten una sola.
+        self._queries: Dict[int, Tuple[SmartQuery, float]] = {}
+        self._query_inflight: Dict[int, Future] = {}
+        self._closed = False
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="smartctl")
+        self.wmi_service = None
+        self.smartctl = smartctl or SmartctlWrapper()
         if not self.smartctl.is_available():
-            warn("smartctl no disponible para mapeo")
-            return drive_map
-        
-        try:
-            # Obtener todos los discos usando smartctl --scan (método profesional)
-            info("🔍 Escaneando discos con smartctl --scan...")
-            scanned_disks = self.smartctl.scan_all_disks()
-            
-            if not scanned_disks:
-                warn("No se encontraron discos con smartctl")
-                return drive_map
-            
-            info(f"✅ Encontrados {len(scanned_disks)} discos físicos")
-            
-            # Obtener información de cada disco físico (tamaño, modelo, etc.)
-            disk_info_map = {}  # physical_drive -> {size, model, device, type}
-            for disk_info in scanned_disks:
-                physical_drive = disk_info.get('physical_drive')
-                device = disk_info.get('device')
-                device_type = disk_info.get('type')
-                
-                if not physical_drive:
-                    continue
-                
-                # Obtener información completa del disco
-                try:
-                    # Primero obtener tamaño (más rápido y necesario para mapeo)
-                    disk_size = self._get_disk_size_from_smartctl(physical_drive, device_type)
-                    
-                    # Luego intentar obtener datos SMART (puede fallar, pero no es crítico para mapeo)
-                    smart_data = None
-                    try:
-                        smart_data = self.smartctl.get_disk_smart_data(
-                            physical_drive,
-                            timeout=3,
-                            max_retries=0,
-                            device_type=device_type
-                        )
-                    except Exception:
-                        # Si falla obtener SMART, continuar sin datos SMART
-                        pass
-                    
-                    # Usar modelo de smart_data si está disponible, sino usar nombre básico
-                    if smart_data:
-                        model = smart_data.get('disk_model', f'Disco {physical_drive}')
-                    else:
-                        model = f'Disco {physical_drive}'
-                    
-                    # Agregar al mapa aunque no tenga datos SMART (el mapeo es lo importante)
-                    disk_info_map[physical_drive] = {
-                        'model': model,
-                        'device': device,
-                        'type': device_type,
-                        'size': disk_size,
-                        'smart_data': smart_data  # Puede ser None
-                    }
-                    debug(f"  Disco {physical_drive}: {model} ({disk_size / 1024**3:.1f} GB)")
-                except Exception as e:
-                    debug(f"Error obteniendo info de {physical_drive}: {e}")
-                    # Aún así, agregar información básica para permitir mapeo
-                    try:
-                        disk_info_map[physical_drive] = {
-                            'model': f'Disco {physical_drive}',
-                            'device': device,
-                            'type': device_type,
-                            'size': 0,  # No se pudo obtener tamaño
-                            'smart_data': None
-                        }
-                    except:
-                        continue
-            
-            # Obtener todas las particiones del sistema con sus tamaños
-            partitions = psutil.disk_partitions()
-            partition_info = []
-            
-            for partition in partitions:
-                drive_letter = self._extract_drive_letter(partition.mountpoint)
-                if not drive_letter:
-                    continue
-                
-                try:
-                    usage = psutil.disk_usage(partition.mountpoint)
-                    partition_info.append({
-                        'drive_letter': drive_letter,
-                        'drive_key': (drive_letter + ":").upper(),
-                        'mountpoint': partition.mountpoint,
-                        'total_size': usage.total,
-                        'partition': partition
-                    })
-                except Exception:
-                    continue
-            
-            # Mapear cada unidad al disco físico más probable
-            # Estrategia: comparar tamaños y asignar el disco que mejor coincida
-            used_physical_drives = set()  # Evitar asignar el mismo disco a múltiples unidades
-            
-            for part_info in partition_info:
-                drive_key = part_info['drive_key']
-                drive_letter = part_info['drive_letter']
-                partition_size = part_info['total_size']
-                
-                best_match = None
-                best_score = 0
-                
-                # Buscar el mejor disco físico que coincida
-                for physical_drive, disk_data in disk_info_map.items():
-                    # Si este disco ya está asignado, saltarlo
-                    if physical_drive in used_physical_drives:
-                        continue
-                    
-                    disk_size = disk_data.get('size', 0)
-                    
-                    # Calcular score de coincidencia basado en tamaño
-                    # Si el tamaño de la partición es menor o igual al tamaño del disco, es una buena coincidencia
-                    if disk_size > 0:
-                        size_ratio = min(partition_size, disk_size) / max(partition_size, disk_size)
-                        score = size_ratio
-                        
-                        # Bonus si el tamaño de la partición es exactamente el tamaño del disco (partición única)
-                        if abs(partition_size - disk_size) < (100 * 1024 * 1024):  # Diferencia < 100MB
-                            score = 1.0
-                        
-                        if score > best_score:
-                            best_score = score
-                            best_match = {
-                                'physical_drive': physical_drive,
-                                'device': disk_data['device'],
-                                'type': disk_data['type'],
-                                'model': disk_data['model'],
-                                'mountpoint': part_info['mountpoint'],
-                                'score': score
-                            }
-                
-                # Si encontramos una buena coincidencia (score > 0.5), asignarla
-                if best_match and best_score > 0.5:
-                    drive_map[drive_key] = best_match
-                    used_physical_drives.add(best_match['physical_drive'])
-                    success(f"✅ Mapeado: {drive_key} -> {best_match['physical_drive']} ({best_match['model']}) [score: {best_score:.2f}]")
-                else:
-                    # Si no hay buena coincidencia, intentar asignar cualquier disco disponible
-                    # pero solo si no hay mejor opción
-                    for physical_drive, disk_data in disk_info_map.items():
-                        if physical_drive not in used_physical_drives:
-                            drive_map[drive_key] = {
-                                'physical_drive': physical_drive,
-                                'device': disk_data['device'],
-                                'type': disk_data['type'],
-                                'model': disk_data['model'],
-                                'mountpoint': part_info['mountpoint'],
-                                'score': 0.3  # Score bajo porque no hay buena coincidencia
-                            }
-                            used_physical_drives.add(physical_drive)
-                            # Mensaje menos alarmante - es normal cuando no hay coincidencia exacta
-                            debug(f"ℹ️ Mapeo aproximado: {drive_key} -> {physical_drive} ({disk_data['model']}) [score: 0.3]")
-                            break
-            
-            if drive_map:
-                info(f"✅ Mapeo completado: {len(drive_map)} unidades mapeadas")
-            else:
-                warn("⚠️ No se pudo mapear ninguna unidad")
-            
-            return drive_map
-            
-        except Exception as e:
-            error(f"Error en mapeo con smartctl: {e}")
-            return drive_map
-    
-    def _get_disk_size_from_smartctl(self, physical_drive: str, device_type: Optional[str] = None) -> int:
-        """Obtiene el tamaño del disco físico usando smartctl"""
-        try:
-            device = None
-            if 'PHYSICALDRIVE' in physical_drive:
-                drive_num = physical_drive.replace('PHYSICALDRIVE', '').strip()
-                device = f"/dev/pd{drive_num}"
-            else:
-                device = physical_drive
-            
-            if not device:
-                return 0
-            
-            cmd = [self.smartctl.smartctl_path, "-i", "-j", device]
-            if device_type:
-                cmd = [self.smartctl.smartctl_path, "-i", "-j", "-d", device_type, device]
-            
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=3,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-            
-            if result.returncode in [0, 4] and result.stdout:
-                import json
-                data = json.loads(result.stdout)
-                # El tamaño puede venir en diferentes campos según el tipo de disco
-                user_capacity = data.get('user_capacity', {})
-                if isinstance(user_capacity, dict):
-                    bytes_value = user_capacity.get('bytes', 0)
-                    if bytes_value:
-                        return int(bytes_value)
-                
-                # Alternativa: buscar en otros campos
-                capacity = data.get('capacity', {})
-                if isinstance(capacity, dict):
-                    bytes_value = capacity.get('bytes', 0)
-                    if bytes_value:
-                        return int(bytes_value)
-            
-            return 0
-        except Exception:
-            return 0
-    
-    def _map_logical_to_physical_drives(self) -> Dict[str, str]:
-        """Crea un mapeo de letra de unidad (ej. 'C:') a disco físico (ej. 'PhysicalDrive0') usando WMI."""
-        if not self.wmi_service:
-            error("WMI service no disponible para mapeo")
-            return {}
-        
-        drive_map = {}
-        try:
-            debug("Iniciando mapeo WMI...")
-            for physical_disk in self.wmi_service.Win32_DiskDrive():
-                debug(f"Disco físico encontrado: {physical_disk.DeviceID}")
-                for partition in physical_disk.associators("Win32_DiskDriveToDiskPartition"):
-                    debug(f"  Partición: {partition.DeviceID}")
-                    for logical_disk in partition.associators("Win32_LogicalDiskToPartition"):
-                        psutil_key = physical_disk.DeviceID.replace('\\\\.\\', '').upper()
-                        logical_drive = logical_disk.DeviceID.upper()
-                        drive_map[logical_drive] = psutil_key
-                        debug(f"  Mapeado: {logical_drive} -> {psutil_key}")
-            
-            info(f"Mapeo final: {drive_map}")
-            
-            # También mostrar qué claves tiene psutil
-            import psutil
-            all_io_counters = psutil.disk_io_counters(perdisk=True)
-            debug(f"Claves de psutil disponibles: {list(all_io_counters.keys())}")
-            
-        except Exception as e:
-            error(f"Error al mapear discos lógicos a físicos: {e}")
-            
-        return drive_map
-    
+            logger.warning("smartctl no disponible: la salud SMART no se podrá consultar")
+        atexit.register(self.shutdown)
+
+    # ------------------------------------------------------------ ciclo de vida
+    def shutdown(self) -> None:
+        """Cancela trabajos pendientes y mata smartctl en curso (idempotente)."""
+        if self._closed:
+            return
+        self._closed = True
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        self.smartctl.shutdown()
+        with self._lock:
+            for future in self._inflight.values():
+                future.cancel()
+            self._inflight.clear()
+
+    # --------------------------------------------------------------- volúmenes
+    def _drive_type(self, partition) -> str:
+        mountpoint = partition.mountpoint
+        opts = (getattr(partition, "opts", "") or "").lower()
+        detected = win_drive_type(mountpoint if mountpoint.endswith(("\\", "/")) else mountpoint + "\\")
+        if detected:
+            return detected
+        fstype = (getattr(partition, "fstype", "") or "").lower()
+        if "cdrom" in opts or fstype in {"cdfs", "udf", "iso9660"}:
+            return "optical"
+        if "remote" in opts or fstype in {"nfs", "nfs4", "cifs", "smbfs", "smb3", "sshfs", "fuse.sshfs"}:
+            return "network"
+        if "removable" in opts:
+            return "removable"
+        if fstype in {"tmpfs", "ramfs"}:
+            return "ram"
+        return "fixed"
+
+    def _is_system_drive(self, mountpoint: str) -> bool:
+        if sys.platform == "win32" or drive_letter_of(mountpoint):
+            letter = drive_letter_of(mountpoint)
+            return bool(letter) and letter == system_drive_letter()
+        return os.path.normpath(mountpoint) == os.path.sep
+
+    def _is_removable_drive(self, device: str) -> bool:
+        """Compatibilidad: True si GetDriveTypeW indica unidad extraíble."""
+        return win_drive_type(device if device.endswith("\\") else device + "\\") == "removable"
+
+    def _extract_drive_letter(self, mountpoint: str) -> str:
+        return drive_letter_of(mountpoint)
 
     def get_all_disks(self) -> List[DiskInfo]:
-        """Obtiene información de todos los discos y particiones disponibles"""
+        """Enumera los volúmenes (siempre lee de nuevo; refresca la instantánea)."""
+        disks: List[DiskInfo] = []
         try:
-            disks = []
-            
-            # Obtener todas las particiones
-            partitions = psutil.disk_partitions()
-            
-            for partition in partitions:
-                try:
-                    # Obtener estadísticas de uso
-                    usage = psutil.disk_usage(partition.mountpoint)
-                    
-                    # Determinar si es unidad del sistema
-                    is_system = self._is_system_drive(partition.mountpoint)
-                    
-                    # Determinar si es removible
-                    is_removable = self._is_removable_drive(partition.device)
-                    
-                    # Extraer letra de unidad (Windows)
-                    drive_letter = self._extract_drive_letter(partition.mountpoint)
-                    
-                    disk_info = DiskInfo(
-                        device=partition.device,
-                        mountpoint=partition.mountpoint,
-                        filesystem=partition.fstype or "Desconocido",
-                        total_size=usage.total,
-                        used_size=usage.used,
-                        free_size=usage.free,
-                        usage_percent=usage.percent,
-                        is_system_drive=is_system,
-                        is_removable=is_removable,
-                        drive_letter=drive_letter
-                    )
-                    
-                    disks.append(disk_info)
-                    
-                except (PermissionError, OSError) as e:
-                    # Ignorar unidades sin permisos
+            partitions = psutil.disk_partitions(all=False)
+        except OSError as exc:
+            logger.error("Error al enumerar particiones: %s", exc)
+            raise
+        for partition in partitions:
+            drive_type = self._drive_type(partition)
+            if drive_type == "optical":
+                # Lectores vacíos lanzan errores; con disco sólo informan.
+                if not os.path.exists(partition.mountpoint):
                     continue
-            
-            # Ordenar por letra de unidad (Windows) o por punto de montaje
-            disks.sort(key=lambda x: x.drive_letter or x.mountpoint)
-            
-            return disks
-            
-        except Exception as e:
-            error(f"Error al obtener información de discos: {e}")
-            return []
-    
-    def get_disk_info(self, path: str) -> Optional[DiskInfo]:
-        """Obtiene información de un disco específico por ruta"""
-        try:
-            # Encontrar la partición que contiene la ruta
-            path_obj = Path(path).resolve()
-            
-            for disk in self.get_all_disks():
-                if path_obj.is_relative_to(Path(disk.mountpoint)):
-                    return disk
-            
-            return None
-            
-        except Exception as e:
-            error(f"Error al obtener información del disco {path}: {e}")
-            return None
-    
-    def get_disk_io_stats(self, path: str) -> Optional[dict]:
-        """Obtiene SOLO datos SMART lifetime reales - Sin fallbacks"""
-        try:
-            disk_info = self.get_disk_info(path)
-            if not disk_info:
-                return None
-
-            # Obtener SOLO datos SMART lifetime reales
-            smart_data = self._get_smart_data(disk_info.drive_letter)
-            
-            # Si no hay datos SMART, devolver None (sin fallback)
-            if not smart_data:
-                warn(f"No hay datos SMART disponibles para {path}")
-                return None
-            
-            return smart_data
-
-        except (ImportError, OSError, KeyError) as e:
-            error(f"Error al obtener estadísticas I/O del disco {path}: {e}")
-            return None
-    
-    def get_multiple_disk_io_stats(self, paths: List[str]) -> Dict[str, Optional[dict]]:
-        """Obtiene datos SMART para múltiples discos en paralelo"""
-        results = {}
-        
-        # Enviar tareas al executor
-        future_to_path = {}
-        for path in paths:
-            future = self._executor.submit(self.get_disk_io_stats, path)
-            future_to_path[future] = path
-        
-        # Recoger resultados
-        for future in as_completed(future_to_path):
-            path = future_to_path[future]
             try:
-                results[path] = future.result()
-            except Exception as e:
-                error(f"Error obteniendo SMART para {path}: {e}")
-                results[path] = None
-        
-        return results
-
-    def prefetch_smart_for_disks(self, paths: List[str]) -> None:
-        """Precarga asíncrona de SMART para calentar la caché de sesión.
-        Lanza tareas en segundo plano y no bloquea la UI.
-        """
-        if not paths:
-            return
-        for path in paths:
-            # Ejecutar en background, resultado ignorado (cacheará internamente)
-            self._executor.submit(self.get_disk_io_stats, path)
-
-    def _get_smart_data(self, drive_letter: str) -> Optional[dict]:
-        """Obtiene SOLO datos SMART lifetime reales usando smartctl - NO fallback, SIN WMI"""
-        if not drive_letter:
-            return None
-        
-        # Si smartctl no está disponible, no devolver nada
-        if not self.smartctl.is_available():
-            error(f"smartctl no disponible - No se pueden obtener datos SMART para {drive_letter}")
-            return None
-        
-        # Crear mapeo usando solo smartctl (sin WMI)
-        if not self._drive_map:
-            debug("Creando mapeo de unidades usando smartctl (sin WMI)...")
-            self._drive_map = self._map_drives_with_smartctl_only()
-        
-        drive_key = (drive_letter + ":").upper()
-        drive_info = self._drive_map.get(drive_key)  # Ahora es un dict con más info
-        
-        if not drive_info:
-            debug(f"No se pudo mapear {drive_letter} a disco físico. Mapeo actual: {list(self._drive_map.keys())}")
-            return None
-        
-        physical_drive_id = drive_info.get('physical_drive')
-        device_type = drive_info.get('type')
-        
-        if not physical_drive_id:
-            return None
-        
-        # Verificar si ya tenemos estos datos en cache de sesión
-        cache_key = f"smart_{physical_drive_id}"
-        cached_data = self._smart_cache.get(cache_key)
-        if cached_data:
-            debug(f"Datos SMART de cache de sesión para {drive_letter}")
-            return cached_data
-        
-        try:
-            debug(f"Obteniendo datos SMART lifetime para {drive_letter} ({physical_drive_id})...")
-            # Mostrar en terminal primero para debugging
-            info(f"🔍 Obteniendo datos SMART para {drive_letter}: ({physical_drive_id})")
-            smart_data = self.smartctl.get_disk_smart_data(physical_drive_id, device_type=device_type)
-            
-            # Mostrar datos en terminal
-            if smart_data:
-                model = smart_data.get('disk_model', 'Desconocido')
-                read_tb = (smart_data.get('read_bytes') or 0) / 1024**4
-                write_tb = (smart_data.get('write_bytes') or 0) / 1024**4
-                temp = smart_data.get('temperature')
-                hours = smart_data.get('power_on_hours')
-                success(f"✅ SMART datos para {drive_letter}: {model} | {read_tb:.2f} TB leídos | {write_tb:.2f} TB escritos | Temp: {temp}°C | Horas: {hours:,}")
-            else:
-                warn(f"⚠️ No se obtuvieron datos SMART para {drive_letter}")
-            
-            if not smart_data:
-                warn(f"smartctl no devolvió datos para {drive_letter} - Datos SMART no disponibles")
-                return None
-            
-            read_bytes = smart_data.get('read_bytes') or 0
-            write_bytes = smart_data.get('write_bytes') or 0
-            read_tb = read_bytes / 1024**4 if read_bytes else 0
-            write_tb = write_bytes / 1024**4 if write_bytes else 0
-            
-            # Si ambos son 0 o muy pequeños (< 1GB), el disco no soporta estos atributos o los datos son inválidos
-            if read_bytes == 0 and write_bytes == 0:
-                warn(f"Disco {drive_letter} no reporta datos de lectura/escritura SMART")
-                return None
-            
-            # Si los datos parecen incorrectos (< 100MB total), también rechazar
-            if (read_bytes + write_bytes) < (100 * 1024 * 1024):
-                warn(f"Disco {drive_letter} reporta datos SMART sospechosos ({read_bytes + write_bytes} bytes)")
-                return None
-            
-            success(f"SMART lifetime: {read_tb:.1f} TB leídos, {write_tb:.1f} TB escritos")
-            
-            result = {
-                'read_count': smart_data.get('read_count', 0),
-                'write_count': smart_data.get('write_count', 0),
-                'read_bytes': read_bytes,
-                'write_bytes': write_bytes,
-                'disk_model': smart_data.get('disk_model', 'Desconocido'),
-                'device_type': smart_data.get('device_type', None),
-                'temperature': smart_data.get('temperature'),
-                'power_on_hours': smart_data.get('power_on_hours'),
-                'power_cycles': smart_data.get('power_cycles'),
-                'health_percentage': smart_data.get('health_percentage', 100),
-                'smart_status': smart_data.get('smart_status', True),
-                'note': '📊 Datos SMART lifetime reales del disco'
-            }
-            
-            # Guardar en cache de sesión
-            self._smart_cache.set(cache_key, result)
-            return result
-                
-        except Exception as e:
-            error(f"Error obteniendo SMART para {drive_letter}: {e}")
-            return None
-    
-    
-    def analyze_disk_space(self, path: str) -> Dict[str, Any]:
-        """Analiza el uso de espacio en una ruta específica"""
-        try:
-            disk_info = self.get_disk_info(path)
-            if not disk_info:
-                return {}
-            
-            # Análisis básico de la carpeta
-            folder_stats = self._analyze_folder_contents(path)
-            
-            return {
-                "disk_info": disk_info,
-                "folder_analysis": folder_stats,
-                "recommendations": self._generate_recommendations(disk_info, folder_stats)
-            }
-            
-        except Exception as e:
-            error(f"Error al analizar espacio del disco: {e}")
-            return {}
-    
-    def get_safe_mode_status(self) -> bool:
-        """Retorna el estado del modo seguro"""
-        return self.safe_mode
-    
-    def set_safe_mode(self, enabled: bool) -> bool:
-        """Cambia el modo seguro (solo administradores)"""
-        # En una implementación real, aquí verificaríamos permisos de administrador
-        self.safe_mode = enabled
-        return True
-    
-    def can_write_to_disk(self, path: str) -> bool:
-        """Verifica si se puede escribir en el disco (considerando modo seguro)"""
-        if self.safe_mode:
-            return False
-        
-        try:
-            disk_info = self.get_disk_info(path)
-            if not disk_info:
-                return False
-            
-            # Verificar permisos de escritura
-            test_file = Path(path) / ".test_write_permission"
-            try:
-                test_file.touch()
-                test_file.unlink()
-                return True
+                usage = psutil.disk_usage(partition.mountpoint)
             except (PermissionError, OSError):
-                return False
-                
-        except Exception:
-            return False
-    
-    def _is_system_drive(self, mountpoint: str) -> bool:
-        """Determina si una unidad es del sistema"""
+                continue
+            disks.append(DiskInfo(
+                device=partition.device,
+                mountpoint=partition.mountpoint,
+                filesystem=partition.fstype or "Desconocido",
+                total_size=usage.total,
+                used_size=usage.used,
+                free_size=usage.free,
+                usage_percent=usage_percent(usage.total, usage.used),
+                is_system_drive=self._is_system_drive(partition.mountpoint),
+                is_removable=drive_type == "removable",
+                drive_letter=drive_letter_of(partition.mountpoint),
+                drive_type=drive_type,
+                opts=getattr(partition, "opts", "") or "",
+            ))
+        disks.sort(key=lambda disk: (disk.drive_letter or "~", disk.mountpoint))
+        with self._lock:
+            self._disks_cache = disks
+            self._disks_cache_time = time.monotonic()
+        return disks
+
+    def _disks_snapshot(self) -> List[DiskInfo]:
+        with self._lock:
+            fresh = self._disks_cache is not None and time.monotonic() - self._disks_cache_time < DISKS_SNAPSHOT_TTL
+            if fresh:
+                return list(self._disks_cache)
         try:
-            # En Windows, la unidad C: es típicamente la del sistema
-            if os.name == 'nt':
-                drive_letter = mountpoint[0].upper() if len(mountpoint) >= 1 else ''
-                if drive_letter == 'C':
-                    return True
-                
-                # También verificar si contiene rutas del sistema
-                system_paths = [
-                    os.environ.get('SystemRoot', 'C:\\Windows'),
-                    os.environ.get('ProgramFiles', 'C:\\Program Files'),
-                    os.environ.get('ProgramFiles(x86)', 'C:\\Program Files (x86)')
-                ]
-                
-                mountpoint_path = Path(mountpoint)
-                for system_path in system_paths:
-                    if system_path and Path(system_path).exists():
-                        try:
-                            if mountpoint_path.is_relative_to(Path(system_path)):
-                                return True
-                        except ValueError:
-                            continue
-            
-            # En otros sistemas, verificar rutas típicas
-            elif os.name == 'posix':
-                system_paths = ['/', '/usr', '/etc', '/var']
-                mountpoint_path = Path(mountpoint)
-                for system_path in system_paths:
-                    try:
-                        if mountpoint_path.is_relative_to(Path(system_path)):
-                            return True
-                    except ValueError:
-                        continue
-                        
-            return False
-            
-        except Exception:
-            return False
-    
-    def _is_removable_drive(self, device: str) -> bool:
-        """Determina si una unidad es removible"""
+            return self.get_all_disks()
+        except OSError:
+            return list(self._disks_cache or [])
+
+    def get_disk_info(self, path: str) -> Optional[DiskInfo]:
+        """Volumen que contiene ``path``: el punto de montaje más específico.
+
+        Usa la instantánea en caché; no vuelve a enumerar en cada llamada.
+        """
         try:
-            # En Windows, verificar si es una unidad removible
-            if os.name == 'nt':
-                drive_letter = device[0] if len(device) >= 1 else ''
-                if drive_letter and drive_letter.isalpha():
-                    # Por ahora, asumir que no es removible para evitar errores
-                    # En una implementación futura se puede usar win32api
-                    return False
-            return False
-        except:
-            return False
-    
-    def _extract_drive_letter(self, mountpoint: str) -> str:
-        """Extrae la letra de unidad en Windows"""
-        if os.name == 'nt' and len(mountpoint) >= 2:
-            if mountpoint[1] == ':':
-                return mountpoint[0].upper()
-        return ""
-    
-    def _analyze_folder_contents(self, path: str) -> Dict[str, Any]:
-        """Analiza el contenido de una carpeta para estadísticas detalladas"""
-        try:
-            path_obj = Path(path)
-            if not path_obj.exists() or not path_obj.is_dir():
-                return {}
-            
-            total_files = 0
-            total_dirs = 0
-            total_size = 0
-            file_types = {}
-            large_files = []  # Archivos grandes (>100MB)
-            recent_files = []  # Archivos recientes (<7 días)
-            old_files = []     # Archivos antiguos (>30 días)
-            
-            from datetime import datetime, timedelta
-            now = datetime.now()
-            week_ago = now - timedelta(days=7)
-            month_ago = now - timedelta(days=30)
-            
-            # Análisis más detallado pero limitado para no bloquear la interfaz
-            max_items = 10000  # Límite para no bloquear
-            item_count = 0
-            
-            for item in path_obj.iterdir():
-                if item_count >= max_items:
-                    break
-                    
+            target = _normalize(path)
+        except (TypeError, ValueError):
+            return None
+        best: Optional[DiskInfo] = None
+        best_len = -1
+        for disk in self._disks_snapshot():
+            mount = _normalize(disk.mountpoint)
+            prefix = mount if mount.endswith(os.sep) else mount + os.sep
+            if (target == mount or target.startswith(prefix)) and len(mount) > best_len:
+                best, best_len = disk, len(mount)
+        return best
+
+    # -------------------------------------------------------- disco físico
+    def _get_or_create_drive_map(self) -> Dict[str, str]:
+        """Mapa WMI letra → PHYSICALDRIVEn (último recurso). Cachea también el fallo."""
+        with self._lock:
+            if self._wmi_map is not None:
+                return self._wmi_map
+            self._wmi_map = {}
+            if sys.platform != "win32" or wmi is None:
+                return self._wmi_map
+            try:
                 try:
-                    if item.is_file():
-                        total_files += 1
-                        item_count += 1
-                        
-                        # Obtener estadísticas del archivo
-                        stat = item.stat()
-                        file_size = stat.st_size
-                        total_size += file_size
-                        
-                        # Contar tipos de archivo
-                        ext = item.suffix.lower()
-                        if ext:
-                            file_types[ext] = file_types.get(ext, 0) + 1
-                        else:
-                            file_types["sin_extension"] = file_types.get("sin_extension", 0) + 1
-                        
-                        # Identificar archivos grandes (>100MB)
-                        if file_size > 100 * 1024 * 1024:  # 100MB
-                            large_files.append({
-                                'name': item.name,
-                                'size': file_size,
-                                'path': str(item)
-                            })
-                        
-                        # Identificar archivos por fecha
-                        mtime = datetime.fromtimestamp(stat.st_mtime)
-                        if mtime > week_ago:
-                            recent_files.append(item.name)
-                        elif mtime < month_ago:
-                            old_files.append(item.name)
-                            
-                    elif item.is_dir():
-                        total_dirs += 1
-                        item_count += 1
-                        
-                except (PermissionError, OSError):
-                    continue
-            
-            # Ordenar archivos grandes por tamaño
-            large_files.sort(key=lambda x: x['size'], reverse=True)
-            
-            return {
-                "total_files": total_files,
-                "total_dirs": total_dirs,
-                "total_size": total_size,
-                "file_types": file_types,
-                "large_files": large_files[:10],  # Top 10 archivos grandes
-                "recent_files_count": len(recent_files),
-                "old_files_count": len(old_files),
-                "analysis_limit_reached": item_count >= max_items
-            }
-            
-        except Exception as e:
-            error(f"Error al analizar contenido de carpeta: {e}")
-            return {}
-    
-    def _generate_recommendations(self, disk_info: DiskInfo, folder_stats: Dict) -> List[str]:
-        """Genera recomendaciones basadas en el análisis del disco"""
-        recommendations = []
-        
-        # Recomendaciones basadas en espacio libre
-        if disk_info.usage_percent > 90:
-            recommendations.append("⚠️ Disco casi lleno. Considera limpiar archivos temporales.")
-        elif disk_info.usage_percent > 80:
-            recommendations.append("🔍 Disco con poco espacio libre. Revisa archivos grandes.")
-        
-        # Recomendaciones basadas en contenido
-        if folder_stats.get("total_files", 0) > 10000:
-            recommendations.append("📁 Muchos archivos. Considera organizar en subcarpetas.")
-        
-        if not recommendations:
-            recommendations.append("✅ Disco en buen estado. No se requieren acciones inmediatas.")
-        
-        return recommendations
-    
-    def format_size(self, size_bytes: int) -> str:
-        """Formatea bytes en formato legible"""
-        if size_bytes == 0:
-            return "0 B"
-        
-        size_names = ["B", "KB", "MB", "GB", "TB"]
-        i = 0
-        while size_bytes >= 1024 and i < len(size_names) - 1:
-            size_bytes /= 1024.0
-            i += 1
-        
-        return f"{size_bytes:.1f} {size_names[i]}"
-    
-    def get_disk_health_status(self, path: str) -> Dict[str, Any]:
-        """Obtiene el estado de salud del disco usando el servicio de salud"""
+                    import pythoncom  # type: ignore
+
+                    pythoncom.CoInitialize()
+                except ImportError:
+                    pass
+                self.wmi_service = wmi.WMI()
+                self._wmi_map = self._map_logical_to_physical_drives()
+            except Exception as exc:  # WMI lanza excepciones COM propias
+                logger.warning("WMI no disponible para el mapeo de discos: %s", exc)
+                self.wmi_service = None
+            return self._wmi_map
+
+    def _map_logical_to_physical_drives(self) -> Dict[str, str]:
+        drive_map: Dict[str, str] = {}
+        if not self.wmi_service:
+            return drive_map
+        for physical_disk in self.wmi_service.Win32_DiskDrive():
+            key = physical_disk.DeviceID.replace("\\\\.\\", "").upper()
+            for partition in physical_disk.associators("Win32_DiskDriveToDiskPartition"):
+                for logical_disk in partition.associators("Win32_LogicalDiskToPartition"):
+                    drive_map[logical_disk.DeviceID.upper()] = key
+        return drive_map
+
+    def resolve_physical_disk(self, mountpoint: str) -> Optional[int]:
+        """Número de disco físico del volumen, con caché y caché negativa con TTL.
+
+        Varias letras pueden apuntar al mismo disco. Nunca se usan tamaños.
+        """
+        key = _normalize(mountpoint)
+        with self._lock:
+            cached = self._drive_map.get(key)
+            if cached is not None:
+                number, stamp = cached
+                if number is not None or time.monotonic() - stamp < NEGATIVE_MAP_TTL:
+                    return number
+        number = win_device_number(mountpoint)
+        letter = drive_letter_of(mountpoint)
+        if number is None and letter:
+            with self._lock:
+                partition_map = self._partition_map
+            if partition_map is None:
+                partition_map = powershell_partition_map()
+                with self._lock:
+                    self._partition_map = partition_map
+            number = partition_map.get(letter)
+        if number is None and letter:
+            physical = self._get_or_create_drive_map().get(f"{letter}:")
+            match = re.search(r"(\d+)$", physical or "")
+            number = int(match.group(1)) if match else None
+        with self._lock:
+            self._drive_map[key] = (number, time.monotonic())
+        return number
+
+    def _smart_target(self, number: int) -> Tuple[str, Optional[str]]:
+        """Dispositivo y tipo ``-d`` de smartctl para el disco físico ``number``."""
+        with self._lock:
+            scan = self._scan
+        if scan is None:
+            scan = self.smartctl.scan_all_disks()
+            with self._lock:
+                self._scan = scan
+        for entry in scan:
+            if entry.get("physical_index") == number:
+                return entry["device"], entry.get("type")
+        return f"/dev/pd{number}", None
+
+    # ------------------------------------------------------------- SMART
+    def _report_key(self, disk: Optional[DiskInfo], mountpoint: str) -> str:
+        return _normalize(disk.mountpoint if disk else mountpoint)
+
+    def get_cached_report(self, mountpoint: str) -> Optional[DiskReport]:
+        disk = self.get_disk_info(mountpoint)
+        key = self._report_key(disk, mountpoint)
+        with self._lock:
+            entry = self._reports.get(key)
+        if entry and time.monotonic() - entry[1] < self.smart_ttl:
+            return entry[0]
+        return None
+
+    def submit_disk_report(self, mountpoint: str, force: bool = False) -> Future:
+        """Future con el DiskReport; reutiliza el que ya esté en vuelo para ese disco."""
+        disk = self.get_disk_info(mountpoint)
+        key = self._report_key(disk, mountpoint)
+        with self._lock:
+            if not force:
+                entry = self._reports.get(key)
+                if entry and time.monotonic() - entry[1] < self.smart_ttl:
+                    done: Future = Future()
+                    done.set_result(entry[0])
+                    return done
+            inflight = self._inflight.get(key)
+            if inflight is not None and not inflight.done():
+                return inflight
+            if self._closed:
+                cancelled: Future = Future()
+                cancelled.cancel()
+                return cancelled
+            future = self._executor.submit(self._build_report, mountpoint, disk, key)
+            self._inflight[key] = future
+
+        def _cleanup(done_future, cache_key=key):
+            with self._lock:
+                if self._inflight.get(cache_key) is done_future:
+                    del self._inflight[cache_key]
+        future.add_done_callback(_cleanup)
+        return future
+
+    def get_disk_report(self, mountpoint: str, force: bool = False, timeout: Optional[float] = None) -> DiskReport:
+        """Versión bloqueante (para workers y tests). No llamar desde la UI."""
+        return self.submit_disk_report(mountpoint, force=force).result(timeout=timeout)
+
+    def _build_report(self, mountpoint: str, disk: Optional[DiskInfo], key: str) -> DiskReport:
+        report = DiskReport(mountpoint=mountpoint, disk=disk)
         try:
-            disk_info = self.get_disk_info(path)
-            if not disk_info:
-                return {"status": "Desconocido", "score": 0, "factors": []}
-            
-            # Obtener SMART reales
-            smart = self.get_disk_io_stats(path) or {}
-            if not smart or not any(
-                smart.get(key) is not None
-                for key in ("temperature", "power_on_hours", "power_cycles", "smart_status")
-            ):
-                return {"status": "Datos SMART no disponibles", "score": None,
-                        "factors": [], "available": False}
-            
-            # Usar el servicio de salud
-            health_result = self.health_service.calculate_health(smart, disk_info)
-            
-            return {
-                "status": health_result.status,
-                "available": True,
-                "score": health_result.score,
-                "factors": health_result.factors,
-                "temp_score": health_result.temp_score,
-                "tbw_score": health_result.tbw_score,
-                "hours_score": health_result.hours_score,
-                "cycles_score": health_result.cycles_score,
-                "device_type": health_result.device_type,
-                "temperature": health_result.temperature,
-                "power_on_hours": health_result.power_on_hours,
-                "power_cycles": health_result.power_cycles,
-                "tbw": health_result.tbw
-            }
-            
-        except Exception as e:
-            error(f"Error al obtener estado de salud del disco: {e}")
-            return {"status": "Error", "score": 0, "factors": ["Error al analizar el disco"]}
+            self._fill_report(report)
+        except Exception as exc:  # El informe nunca debe tumbar el worker
+            logger.exception("Error obteniendo SMART para %s", mountpoint)
+            report.error = "error"
+            report.messages.append(str(exc))
+            report.health = {"available": False, "status": "Error al leer SMART", "score": None, "factors": []}
+        with self._lock:
+            self._reports[key] = (report, time.monotonic())
+        return report
+
+    def _fill_report(self, report: DiskReport) -> None:
+        disk = report.disk
+        unavailable = {"available": False, "score": None, "factors": []}
+        if disk is None:
+            report.error = "no_disk"
+            report.health = {**unavailable, "status": "Unidad no encontrada"}
+            return
+        if not disk.smart_applicable:
+            report.error = "not_applicable"
+            report.health = {**unavailable, "status": f"SMART no aplica a {disk.drive_type_label.lower()}"}
+            return
+        if not self.smartctl.is_available():
+            report.error = "unavailable"
+            report.health = {**unavailable, "status": "smartctl no disponible"}
+            return
+        number = self.resolve_physical_disk(disk.mountpoint)
+        if number is None:
+            report.error = "unmapped"
+            report.health = {**unavailable, "status": "No se pudo asociar la unidad a un disco físico"}
+            return
+        report.physical_disk = number
+        device, device_type = self._smart_target(number)
+        report.device, report.device_type = device, device_type
+        self._apply_query(report, self._query_disk(number, device, device_type))
+
+    def _query_disk(self, number: int, device: str, device_type: Optional[str]) -> SmartQuery:
+        """Un único smartctl en vuelo por disco físico, con la misma TTL que los informes."""
+        with self._lock:
+            entry = self._queries.get(number)
+            if entry and time.monotonic() - entry[1] < self.smart_ttl:
+                return entry[0]
+            future = self._query_inflight.get(number)
+            owner = future is None
+            if owner:
+                future = Future()
+                self._query_inflight[number] = future
+        if not owner:
+            return future.result()
+        try:
+            query = self.smartctl.query(device, timeout=self.smart_timeout, device_type=device_type)
+        except BaseException as exc:
+            future.set_exception(exc)
+            raise
+        finally:
+            with self._lock:
+                self._query_inflight.pop(number, None)
+        with self._lock:
+            self._queries[number] = (query, time.monotonic())
+        future.set_result(query)
+        return query
+
+    def _apply_query(self, report: DiskReport, query: SmartQuery) -> None:
+        report.messages = list(query.messages)
+        if not query.ok:
+            report.error = query.error or "error"
+            status = {
+                "admin_required": "Se necesitan permisos de administrador para leer SMART",
+                "timeout": "El disco no respondió a tiempo",
+                "open_failed": "No se pudo abrir el dispositivo",
+            }.get(report.error, "Datos SMART no disponibles")
+            report.health = {"available": False, "score": None, "factors": [], "status": status,
+                             "admin_required": report.error == "admin_required"}
+            return
+        report.error = None
+        report.smart = query.data
+        report.health = self._health_dict(query.data, report.disk)
+        if self.history is not None:
+            report.history_alerts = self.history.record(query.data)
+            report.history = self.history.trend(query.data)
+            if report.history_alerts:
+                report.health.setdefault("alerts", []).extend(report.history_alerts)
+
+    def _health_dict(self, smart: Dict[str, Any], disk: DiskInfo) -> Dict[str, Any]:
+        try:
+            result = self.health_service.calculate_health(smart, disk)
+        except (TypeError, ValueError, KeyError) as exc:
+            logger.warning("No se pudo calcular la salud: %s", exc)
+            return {"available": False, "score": None, "factors": [], "status": "No se pudo calcular la salud"}
+        return {
+            "status": result.status,
+            "available": result.available,
+            "score": result.score,
+            "level": result.level,
+            "factors": result.factors,
+            "temp_score": result.temp_score,
+            "tbw_score": result.tbw_score,
+            "hours_score": result.hours_score,
+            "cycles_score": result.cycles_score,
+            "wear_score": result.wear_score,
+            "device_type": result.device_type,
+            "temperature": result.temperature,
+            "power_on_hours": result.power_on_hours,
+            "power_cycles": result.power_cycles,
+            "tbw": result.tbw,
+            "sectors": result.sectors,
+            "alerts": list(result.alerts),
+        }
+
+    def retry_elevated(self, mountpoints: List[str]) -> Dict[str, DiskReport]:
+        """Relanza smartctl elevado (UAC) para las unidades indicadas.
+
+        Bloquea hasta que termina: llamar desde un hilo de trabajo.
+        """
+        targets = []
+        pending: Dict[str, List[DiskReport]] = {}
+        for mountpoint in mountpoints:
+            disk = self.get_disk_info(mountpoint)
+            report = DiskReport(mountpoint=mountpoint, disk=disk)
+            if disk is None or not disk.smart_applicable:
+                continue
+            number = self.resolve_physical_disk(disk.mountpoint)
+            if number is None:
+                continue
+            device, device_type = self._smart_target(number)
+            report.physical_disk, report.device, report.device_type = number, device, device_type
+            if device not in pending:
+                targets.append((device, device_type))
+            pending.setdefault(device, []).append(report)
+        results = self.smartctl.query_elevated(targets) if targets else {}
+        reports: Dict[str, DiskReport] = {}
+        for device, items in pending.items():
+            query = results.get(device) or SmartQuery(device=device, error="cancelled")
+            if query.ok and items[0].physical_disk is not None:
+                with self._lock:
+                    self._queries[items[0].physical_disk] = (query, time.monotonic())
+            for report in items:
+                self._apply_query(report, query)
+                with self._lock:
+                    self._reports[self._report_key(report.disk, report.mountpoint)] = (report, time.monotonic())
+                reports[report.mountpoint] = report
+        return reports
+
+    def invalidate(self) -> None:
+        """Olvida mapeos y SMART cacheados (botón Actualizar)."""
+        with self._lock:
+            self._reports.clear()
+            self._queries.clear()
+            self._drive_map.clear()
+            self._partition_map = None
+            self._scan = None
+
+    @staticmethod
+    def needs_admin_hint() -> bool:
+        return not is_user_admin()
+
+    # --------------------------------------------- API de compatibilidad
+    def prefetch_smart_for_disks(self, paths: List[str]) -> None:
+        """Precarga en segundo plano (no bloquea)."""
+        for path in paths or ():
+            self.submit_disk_report(path)
+
+    def get_disk_io_stats(self, path: str) -> Optional[dict]:
+        """Datos SMART del disco (bloqueante: sólo desde hilos de trabajo)."""
+        return self.get_disk_report(path).smart
+
+    def get_disk_health_status(self, path: str) -> Dict[str, Any]:
+        """Estado de salud (bloqueante: sólo desde hilos de trabajo)."""
+        try:
+            return self.get_disk_report(path).health
+        except Exception as exc:  # Nunca "CRÍTICO 0/100" por una excepción
+            logger.exception("Error al obtener estado de salud de %s", path)
+            return {"status": "Error al leer SMART", "score": None, "factors": [], "available": False,
+                    "error": str(exc)}
+
+    def get_safe_mode_status(self) -> bool:
+        return self.safe_mode
+
+    def set_safe_mode(self, enabled: bool) -> bool:
+        self.safe_mode = bool(enabled)
+        return True
+
+    def format_size(self, size_bytes: int) -> str:
+        return format_bytes(size_bytes)
