@@ -354,292 +354,323 @@ class VirtualizedMovementsModel(QAbstractTableModel):
         return self._ext_icons.get(ext.lower(), '📄')
 
 
+
 class VirtualizedDuplicatesModel(QAbstractTableModel):
     """
-    Modelo virtualizado para la tabla de duplicados en duplicates_dashboard.py
-    Optimizado para manejar miles de archivos duplicados
+    Modelo virtualizado para la tabla de duplicados.
+
+    El estado de los checkboxes se guarda por ruta (no por número de fila),
+    de modo que se conserva al cambiar de página, ordenar o filtrar.
     """
-    
+
     def __init__(self, data: List[Dict[str, Any]] = None, parent=None):
         super().__init__(parent)
         self._data = data if data else []
-        self._headers = ["", "Nombre", "Ubicación", "Tamaño", "Fecha", "Hash/ID", "Acciones"]
-        self._checked_rows = set()
-    
+        self._headers = ["", "Nombre", "Ubicación", "Tamaño", "Fecha", "Comparación", "Acciones"]
+        self._checked_paths: set = set()
+
+    # ------------------------------------------------------------------ Qt
     def rowCount(self, parent=QModelIndex()) -> int:
-        """Retorna el número total de filas"""
         if parent.isValid():
             return 0
         return len(self._data)
-    
+
     def columnCount(self, parent=QModelIndex()) -> int:
-        """Retorna el número de columnas"""
         if parent.isValid():
             return 0
         return len(self._headers)
-    
+
+    def _is_checked(self, item_data: Dict[str, Any]) -> bool:
+        return str(item_data.get("path", "")) in self._checked_paths
+
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
-        """
-        Retorna los datos para una celda específica
-        SOLO SE RENDERIZA LO VISIBLE (virtualización = performance)
-        """
         if not index.isValid() or not (0 <= index.row() < len(self._data)):
             return None
-        
         row = index.row()
         col = index.column()
         item_data = self._data[row]
-        
-        # Display role (texto)
+
         if role == Qt.ItemDataRole.DisplayRole:
-            if col == 0:  # Checkbox - no mostrar texto
+            if col == 0:
                 return None
-            elif col == 1:  # Nombre
-                name = item_data.get('name', '')
-                is_original = item_data.get('is_original', False)
-                return f"Conservar · {name}" if is_original else f"Copia · {name}"
-            elif col == 2:  # Ubicación
-                return str(item_data.get('location', ''))
-            elif col == 3:  # Tamaño
-                size_mb = item_data.get('size', 0) / (1024 * 1024)
+            if col == 1:
+                name = item_data.get("name", "")
+                return f"Conservar · {name}" if item_data.get("is_original", False) else f"Copia · {name}"
+            if col == 2:
+                return str(item_data.get("location", ""))
+            if col == 3:
+                size_mb = item_data.get("size", 0) / (1024 * 1024)
                 return f"{size_mb:.2f} MB"
-            elif col == 4:  # Fecha
-                timestamp = item_data.get('date', 0)
+            if col == 4:
+                timestamp = item_data.get("date", 0)
                 if timestamp:
                     return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
                 return "Desconocida"
-            elif col == 5:  # Hash/ID
-                hash_value = item_data.get('hash', 'N/A')
-                hash_display = hash_value[:16] + "..." if hash_value and len(hash_value) > 16 else hash_value
+            if col == 5:
+                hash_value = str(item_data.get("hash", "") or "")
+                hash_display = hash_value[:12] + "…" if len(hash_value) > 12 else hash_value
                 status = item_data.get("match_status", "Candidato")
-                return f"{status} · {hash_display}"
-            elif col == 6:  # Acciones
+                return f"{status} · {hash_display}" if hash_display else status
+            if col == 6:
                 return "🗑️"
-        
-        # Checkbox role
+
         elif role == Qt.ItemDataRole.CheckStateRole and col == 0:
-            return Qt.CheckState.Checked if row in self._checked_rows else Qt.CheckState.Unchecked
-        
-        # Font role
+            return Qt.CheckState.Checked if self._is_checked(item_data) else Qt.CheckState.Unchecked
+
         elif role == Qt.ItemDataRole.FontRole:
-            if col == 1 and item_data.get('is_original', False):
+            if col == 1 and item_data.get("is_original", False):
                 font = QFont(QApplication.font())
                 font.setBold(True)
                 return font
-        
-        # Tooltip role
+
         elif role == Qt.ItemDataRole.ToolTipRole:
             if col == 1:
-                path = item_data.get('path', '')
-                return f"Ruta completa: {path}\n\n🖼️ Botón derecho para previsualizar imagen"
-            elif col == 3:
-                size_bytes = item_data.get('size', 0)
-                return f"Tamaño exacto: {size_bytes:,} bytes"
-            elif col == 5:
-                hash_value = item_data.get('hash', 'N/A')
-                return f"{item_data.get('match_status', 'Candidato')}\nHash/ID: {hash_value}"
-        
+                return f"Ruta completa: {item_data.get('path', '')}\n\nBotón derecho para previsualizar"
+            if col == 3:
+                return f"Tamaño exacto: {item_data.get('size', 0):,} bytes"
+            if col == 5:
+                return f"{item_data.get('match_status', 'Candidato')}\nGrupo: {item_data.get('hash', 'N/A')}"
+            if col == 6:
+                return "Doble clic para retirar solo este archivo"
         return None
-    
+
     def setData(self, index: QModelIndex, value: Any, role: int = Qt.ItemDataRole.EditRole) -> bool:
-        """Permite modificar datos (checkboxes)"""
         if not index.isValid():
             return False
-        
-        row = index.row()
-        col = index.column()
-        
-        if role == Qt.ItemDataRole.CheckStateRole and col == 0:
-            if value == Qt.CheckState.Checked:
-                self._checked_rows.add(row)
+        if role == Qt.ItemDataRole.CheckStateRole and index.column() == 0:
+            path = str(self._data[index.row()].get("path", ""))
+            if value == Qt.CheckState.Checked or value == Qt.CheckState.Checked.value:
+                self._checked_paths.add(path)
             else:
-                self._checked_rows.discard(row)
-            
+                self._checked_paths.discard(path)
             self.dataChanged.emit(index, index, [Qt.ItemDataRole.CheckStateRole])
             return True
-        
         return False
-    
+
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
-        """Define qué celdas son editables/seleccionables"""
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
-        
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        
         if index.column() == 0:
             flags |= Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEditable
-        
         return flags
-    
+
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
-        """Retorna los headers de columnas/filas"""
         if role == Qt.ItemDataRole.DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
                 return self._headers[section] if section < len(self._headers) else ""
-            else:
-                return str(section + 1)
-        
+            return str(section + 1)
         return QVariant()
-    
-    def update_data(self, new_data: List[Dict[str, Any]]):
-        """Actualiza los datos del modelo"""
+
+    # ------------------------------------------------------------------ datos
+    def update_data(self, new_data: List[Dict[str, Any]], keep_checks: bool = True):
         self.beginResetModel()
         self._data = new_data
-        self._checked_rows.clear()
+        if not keep_checks:
+            self._checked_paths.clear()
         self.endResetModel()
-    
+
+    def _all_rows(self) -> List[Dict[str, Any]]:
+        return self._data
+
+    def _emit_checks_changed(self):
+        if self.rowCount() > 0:
+            self.dataChanged.emit(self.index(0, 0), self.index(self.rowCount() - 1, 0),
+                                  [Qt.ItemDataRole.CheckStateRole])
+
     def get_checked_rows(self) -> List[int]:
-        """Retorna lista de índices de filas marcadas"""
-        return sorted(list(self._checked_rows))
-    
+        """Filas marcadas de la vista actual (página)."""
+        return [i for i, item in enumerate(self._data) if self._is_checked(item)]
+
+    def get_checked_paths(self) -> List[str]:
+        """Rutas marcadas en todas las páginas (solo de filas cargadas)."""
+        present = {str(item.get("path", "")) for item in self._all_rows()}
+        return sorted(self._checked_paths & present)
+
+    def get_checked_entries(self) -> List[Dict[str, Any]]:
+        return [item for item in self._all_rows() if self._is_checked(item)]
+
+    def set_checked_paths(self, paths) -> None:
+        self._checked_paths = {str(p) for p in paths}
+        self._emit_checks_changed()
+
     def get_row_data(self, row: int) -> Optional[Dict[str, Any]]:
-        """Retorna los datos de una fila específica"""
         if 0 <= row < len(self._data):
             return self._data[row]
         return None
-    
+
     def check_all_duplicates(self):
-        """Marca solo los duplicados (rojos 🔴)"""
-        self._checked_rows = {
-            i for i in range(len(self._data)) 
-            if not self._data[i].get('is_original', False)
+        """Marca todas las copias (no las que se conservan) en todas las páginas."""
+        self._checked_paths = {
+            str(item.get("path", "")) for item in self._all_rows() if not item.get("is_original", False)
         }
-        self.dataChanged.emit(
-            self.index(0, 0),
-            self.index(self.rowCount() - 1, 0),
-            [Qt.ItemDataRole.CheckStateRole]
-        )
-    
+        self._emit_checks_changed()
+
     def uncheck_all(self):
-        """Desmarca todos los checkboxes"""
-        self._checked_rows.clear()
-        self.dataChanged.emit(
-            self.index(0, 0),
-            self.index(self.rowCount() - 1, 0),
-            [Qt.ItemDataRole.CheckStateRole]
-        )
-    
+        self._checked_paths.clear()
+        self._emit_checks_changed()
+
     def clear_data(self):
-        """Limpia todos los datos del modelo"""
         self.beginResetModel()
         self._data = []
-        self._checked_rows.clear()
+        self._checked_paths.clear()
         self.endResetModel()
+
+
+def _group_key(item: Dict[str, Any]) -> str:
+    return str(item.get("group_key") or item.get("hash") or "")
 
 
 class PaginatedDuplicatesModel(VirtualizedDuplicatesModel):
     """
-    Modelo paginado para optimizar memoria con grandes cantidades de datos
-    Carga solo una "página" de datos a la vez
+    Modelo paginado por grupos: un grupo de duplicados nunca se parte entre
+    dos páginas y las marcas se conservan al cambiar de página.
     """
-    
+
     def __init__(self, page_size: int = 1000, parent=None):
         super().__init__([], parent)
-        self._full_data = []  # Todos los datos
+        self._full_data: List[Dict[str, Any]] = []
         self._page_size = page_size
         self._current_page = 0
-        self._total_pages = 0
-        self._sort_column = -1  # Columna por la que se ordena (-1 = sin ordenar)
-        self._sort_order = Qt.SortOrder.AscendingOrder  # Orden ascendente/descendente
-    
-    def load_full_data(self, full_data: List[Dict[str, Any]]):
-        """Carga todos los datos pero muestra solo la primera página"""
-        self._full_data = full_data
-        self._total_pages = (len(full_data) + self._page_size - 1) // self._page_size
-        self._current_page = 0
+        self._pages: List[tuple] = []  # (inicio, fin) en _full_data
+        self._sort_column = -1
+        self._sort_order = Qt.SortOrder.AscendingOrder
+
+    @property
+    def _total_pages(self) -> int:
+        return len(self._pages)
+
+    def _all_rows(self) -> List[Dict[str, Any]]:
+        return self._full_data
+
+    def _build_pages(self) -> None:
+        self._pages = []
+        start = 0
+        count = 0
+        total = len(self._full_data)
+        for idx in range(total):
+            count += 1
+            last = idx == total - 1
+            boundary = last or _group_key(self._full_data[idx + 1]) != _group_key(self._full_data[idx])
+            if boundary and (count >= self._page_size or last):
+                self._pages.append((start, idx + 1))
+                start = idx + 1
+                count = 0
+
+    def load_full_data(self, full_data: List[Dict[str, Any]], keep_checks: bool = True):
+        present = {str(item.get("path", "")) for item in full_data}
+        if keep_checks:
+            self._checked_paths &= present
+        else:
+            self._checked_paths.clear()
+        self._full_data = list(full_data)
+        if self._sort_column != -1:
+            self._sort_data_respecting_groups()
+        self._build_pages()
+        self._current_page = min(self._current_page, max(0, self._total_pages - 1))
         self._load_current_page()
-    
+
     def _load_current_page(self):
-        """Carga solo los datos de la página actual"""
-        start_idx = self._current_page * self._page_size
-        end_idx = min(start_idx + self._page_size, len(self._full_data))
-        page_data = self._full_data[start_idx:end_idx]
-        self.update_data(page_data)
-    
+        if not self._pages:
+            self.update_data([])
+            return
+        start, end = self._pages[self._current_page]
+        self.update_data(self._full_data[start:end])
+
+    def clear_data(self):
+        self._full_data = []
+        self._pages = []
+        self._current_page = 0
+        super().clear_data()
+
+    def remove_paths(self, paths) -> None:
+        """Quita filas (p. ej. tras retirarlas) y descarta grupos con menos de 2 copias."""
+        removed = {str(p) for p in paths}
+        remaining = [item for item in self._full_data if str(item.get("path", "")) not in removed]
+        counts: Dict[str, int] = {}
+        for item in remaining:
+            counts[_group_key(item)] = counts.get(_group_key(item), 0) + 1
+        remaining = [item for item in remaining if counts.get(_group_key(item), 0) >= 2]
+        self._checked_paths -= removed
+        self.load_full_data(remaining)
+
     def next_page(self):
-        """Avanza a la siguiente página"""
         if self._current_page < self._total_pages - 1:
             self._current_page += 1
             self._load_current_page()
             return True
         return False
-    
+
     def previous_page(self):
-        """Retrocede a la página anterior"""
         if self._current_page > 0:
             self._current_page -= 1
             self._load_current_page()
             return True
         return False
-    
+
     def go_to_page(self, page_number: int):
-        """Va a una página específica (0-indexed)"""
         if 0 <= page_number < self._total_pages:
             self._current_page = page_number
             self._load_current_page()
             return True
         return False
-    
+
     def get_page_info(self) -> Dict[str, int]:
-        """Retorna información sobre la paginación actual"""
+        if self._pages:
+            start, end = self._pages[self._current_page]
+        else:
+            start, end = 0, 0
         return {
-            'current_page': self._current_page + 1,  # 1-indexed para UI
-            'total_pages': self._total_pages,
-            'page_size': self._page_size,
-            'total_items': len(self._full_data),
-            'showing_from': self._current_page * self._page_size + 1,
-            'showing_to': min((self._current_page + 1) * self._page_size, len(self._full_data))
+            "current_page": self._current_page + 1,
+            "total_pages": max(1, self._total_pages),
+            "page_size": self._page_size,
+            "total_items": len(self._full_data),
+            "showing_from": start + 1 if end else 0,
+            "showing_to": end,
         }
-    
+
     def sort(self, column: int, order: Qt.SortOrder = Qt.SortOrder.AscendingOrder):
-        """Ordena los datos por la columna especificada respetando grupos de duplicados"""
         if not self._full_data:
             return
-            
         self._sort_column = column
         self._sort_order = order
-        
-        # Ordenar respetando grupos de duplicados
         self._sort_data_respecting_groups()
-        
-        # Recargar la página actual
         self._current_page = 0
-        self._total_pages = (len(self._full_data) + self._page_size - 1) // self._page_size
+        self._build_pages()
         self._load_current_page()
-    
+
     def _sort_data_respecting_groups(self):
-        """Ordena los datos respetando los grupos de duplicados"""
+        """Ordena los grupos entre sí (por su primer archivo) sin separarlos."""
         if self._sort_column == -1:
             return
-            
-        # Obtener nombre de la columna
         column_name = self._headers[self._sort_column] if self._sort_column < len(self._headers) else ""
-        
-        # Función de ordenamiento
-        def sort_key(item):
+
+        def item_key(item):
             if column_name == "Tamaño":
-                return item.get('size', 0)
-            elif column_name == "Fecha":
-                return item.get('date', 0)  # Usar 'date' en lugar de 'modified_time'
-            elif column_name == "Nombre":
-                return item.get('name', '').lower()  # Usar 'name' en lugar de 'filename'
-            elif column_name == "Ubicación":
-                return item.get('location', '').lower()  # Usar 'location' en lugar de 'path'
-            else:
-                return str(item.get('name', ''))
-        
-        # Los datos son una lista plana de diccionarios, no grupos anidados
-        # Ordenar directamente la lista
-        self._full_data.sort(
-            key=sort_key,
-            reverse=(self._sort_order == Qt.SortOrder.DescendingOrder)
-        )
-    
+                return item.get("size", 0)
+            if column_name == "Fecha":
+                return item.get("date", 0)
+            if column_name == "Nombre":
+                return str(item.get("name", "")).lower()
+            if column_name == "Ubicación":
+                return str(item.get("location", "")).lower()
+            return str(item.get("name", ""))
+
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for item in self._full_data:
+            groups.setdefault(_group_key(item), []).append(item)
+        reverse = self._sort_order == Qt.SortOrder.DescendingOrder
+        ordered = []
+        for items in groups.values():
+            originals = [i for i in items if i.get("is_original")]
+            rest = sorted((i for i in items if not i.get("is_original")), key=item_key, reverse=reverse)
+            ordered.append(originals + rest)
+        ordered.sort(key=lambda items: item_key(items[0]), reverse=reverse)
+        self._full_data = [item for items in ordered for item in items]
+
     def get_sort_info(self) -> Dict[str, Any]:
-        """Retorna información sobre el ordenamiento actual"""
         return {
-            'column': self._sort_column,
-            'order': self._sort_order,
-            'column_name': self._headers[self._sort_column] if 0 <= self._sort_column < len(self._headers) else ""
+            "column": self._sort_column,
+            "order": self._sort_order,
+            "column_name": self._headers[self._sort_column] if 0 <= self._sort_column < len(self._headers) else "",
         }
