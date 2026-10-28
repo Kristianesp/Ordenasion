@@ -57,7 +57,7 @@ from src.utils.constants import COLORS, DIALOG_STYLES, UI_CONFIG
 from src.utils.themes import ThemeManager
 from src.utils.fast_theme_applier import FastThemeApplier
 from src.utils.theme_cache import ThemeCache
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config, set_app_config
 from src.utils.version import APP_VERSION
 from src.utils.logger import warn as log_warn
 from src.core.category_manager import CategoryManager
@@ -106,9 +106,12 @@ class FileOrganizerGUI(QMainWindow):
 
         self.app_config = app_config_ref or self._app_state.app_config
         if self.app_config is None:
-            from src.utils.app_config import AppConfig
+            from src.utils.app_config import get_app_config
 
-            self.app_config = AppConfig()
+            self.app_config = get_app_config()
+        # Una única configuración en todo el proceso: las vistas y servicios
+        # que no la reciben inyectada usan esta (get_app_config()).
+        set_app_config(self.app_config)
 
         self.disk_manager = None  # Se obtendra de app_state cuando se necesite
 

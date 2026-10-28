@@ -10,7 +10,7 @@ el servicio, el renderer HTML y el visor de discos.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ class HealthService:
     """Servicio para calcular salud de discos basado en datos SMART."""
 
     def __init__(self, app_config: Optional[AppConfig] = None):
-        self.app_config = app_config or AppConfig()
+        self.app_config = app_config or get_app_config()
 
     def calculate_health(self, smart_data: Dict[str, Any], disk_info: Any) -> HealthResult:
         """Calcula la salud con los factores disponibles.

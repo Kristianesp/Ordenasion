@@ -267,9 +267,9 @@ class DiscogsClientMixin:
 
     def _get_discogs_token(self) -> str:
         try:
-            from src.utils.app_config import AppConfig
+            from src.utils.app_config import get_app_config
 
-            token = AppConfig().get_discogs_token().strip()
+            token = get_app_config().get_discogs_token().strip()
             if token:
                 return token
         except Exception:
@@ -278,8 +278,8 @@ class DiscogsClientMixin:
 
     def _get_discogs_enabled(self) -> bool:
         try:
-            from src.utils.app_config import AppConfig
+            from src.utils.app_config import get_app_config
 
-            return bool(AppConfig().get_discogs_enabled())
+            return bool(get_app_config().get_discogs_enabled())
         except Exception:
             return False

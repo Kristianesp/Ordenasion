@@ -240,8 +240,8 @@ class ApplicationState:
                 if self.app_config is None:
                     try:
                         debug("[AppState] Inicializando AppConfig de forma lazy...")
-                        from src.utils.app_config import AppConfig
-                        self.app_config = AppConfig()
+                        from src.utils.app_config import get_app_config
+                        self.app_config = get_app_config()
                         
                         # Cargar configuración guardada
                         try:

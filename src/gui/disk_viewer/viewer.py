@@ -22,7 +22,7 @@ from src.gui.disk_viewer.health_renderer import (render_basic_html, render_conte
                                                  smart_metric_texts)
 from src.gui.disk_viewer.styles import fluent_palette, legacy_palette, legacy_stylesheet
 from src.gui.v2.theme import apply_control_sizes, html_type_scale
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 from src.utils.formatting import format_bytes
 
 logger = logging.getLogger(__name__)
@@ -425,7 +425,7 @@ class DiskViewer(QWidget):
                 return config
             widget = widget.parentWidget()
         if self._fallback_config is None:
-            self._fallback_config = AppConfig()
+            self._fallback_config = get_app_config()
         return self._fallback_config
 
     def get_current_theme_name(self) -> str:

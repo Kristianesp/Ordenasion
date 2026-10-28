@@ -70,9 +70,9 @@ class ConfigDialog(QDialog):
             QTimer.singleShot(0, self.focus_exclusions_section)
 
     def _build_app_config(self):
-        from src.utils.app_config import AppConfig
+        from src.utils.app_config import get_app_config
 
-        return AppConfig()
+        return get_app_config()
 
     def _effective_legacy_theme(self) -> str:
         """Paleta del modal según el modo global; no modifica preferencias."""

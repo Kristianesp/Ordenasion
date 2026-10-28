@@ -52,7 +52,7 @@ from src.gui.table_models import PaginatedDuplicatesModel
 from src.gui.task_center import TaskCenterDialog, task_registry
 from src.gui.v2.theme import ElidedPathLabel, apply_control_sizes, apply_menu_surface, typography_scale
 from src.utils.constants import DUPLICATE_METHODS
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 from src.utils.logger import debug
 from src.utils.paths import user_data_file
 
@@ -182,7 +182,7 @@ class DuplicatesDashboard(DuplicatesColumnsMixin, DuplicatesPreviewMixin, Duplic
         self.current_folder = None
         self._scan_done = False
         self.transaction_manager = TransactionManager(str(user_data_file("duplicate_operations_log.json")))
-        self.app_config = AppConfig()
+        self.app_config = get_app_config()
         self.ignored_hashes = set(self.app_config.get_ignored_duplicate_hashes())
         self.preferred_originals = self.app_config.get_preferred_originals()
         default_method = str(self.app_config.get("duplicates.default_method", "hybrid") or "hybrid")

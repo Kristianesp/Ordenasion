@@ -125,9 +125,9 @@ class AudioDuplicateFinder:
         if self.use_chromaprint is not None:
             return bool(self.use_chromaprint)
         try:
-            from src.utils.app_config import AppConfig
+            from src.utils.app_config import get_app_config
 
-            return bool(AppConfig().get("audio.local_chromaprint", True))
+            return bool(get_app_config().get("audio.local_chromaprint", True))
         except (ImportError, OSError, ValueError):
             return True
 

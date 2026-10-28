@@ -56,9 +56,9 @@ def sync_library_playback_rate(view: Any, persist: bool = False) -> None:
 
     if persist:
         try:
-            from src.utils.app_config import AppConfig
+            from src.utils.app_config import get_app_config
 
-            AppConfig().set_music_preview_playback_rate(playback_rate)
+            get_app_config().set_music_preview_playback_rate(playback_rate)
         except Exception:
             pass
 

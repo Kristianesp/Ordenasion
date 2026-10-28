@@ -11,7 +11,7 @@ import logging
 from typing import Dict
 
 from src.gui.v2.theme import current_tokens
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ def legacy_palette(theme_name: str) -> Dict[str, str]:
     except (ImportError, KeyError, AttributeError) as exc:
         logger.debug("Tema heredado no disponible (%s); se usan tokens Fluent", exc)
         colors = {}
-    fallback = fluent_palette(AppConfig())
+    fallback = fluent_palette(get_app_config())
     for key, value in fallback.items():
         colors.setdefault(key, value)
     return colors

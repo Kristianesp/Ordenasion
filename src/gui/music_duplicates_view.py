@@ -168,8 +168,15 @@ class MusicDuplicatesView(QWidget):
     LIBRARY_COLUMN_DEFAULTS = LIBRARY_COLUMN_DEFAULTS
     LIBRARY_SPLITTER_DEFAULT_SIZES = LIBRARY_SPLITTER_DEFAULT_SIZES
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, app_config=None):
         super().__init__(parent)
+        self._app_config = app_config
+        # Guardado de anchos con rebote: arrastrar una columna (o restaurar el
+        # diseño al arrancar) no reescribe la configuración en cada píxel.
+        self._column_widths_timer = QTimer(self)
+        self._column_widths_timer.setSingleShot(True)
+        self._column_widths_timer.setInterval(400)
+        self._column_widths_timer.timeout.connect(self._flush_column_widths)
         self.current_folder: str | None = None
         self.results: Dict[str, List[Dict[str, Any]]] = {}
         self.library_all_rows: list[Dict[str, Any]] = []
@@ -409,9 +416,7 @@ class MusicDuplicatesView(QWidget):
             self.music_toast_frame.hide()
 
     def _restore_music_state(self):
-        from src.utils.app_config import AppConfig
-
-        app_config = AppConfig()
+        app_config = self.app_config
         last_folder = app_config.get_music_last_folder().strip()
         recursive = app_config.get_music_recursive()
         preview_playback_rate = app_config.get_music_preview_playback_rate()
@@ -1230,18 +1235,14 @@ class MusicDuplicatesView(QWidget):
         return
 
     def _persist_music_state(self):
-        from src.utils.app_config import AppConfig
-
-        app_config = AppConfig()
+        app_config = self.app_config
         app_config.set_music_last_folder(
             self.current_folder or self.path_input.text().strip()
         )
         app_config.set_music_recursive(self.recursive_cb.isChecked())
 
     def _apply_saved_column_widths(self):
-        from src.utils.app_config import AppConfig
-
-        widths = AppConfig().get_music_library_column_widths()
+        widths = self.app_config.get_music_library_column_widths()
         if widths and any(width > 0 for width in widths):
             for index, width in enumerate(widths[: self.library_table.columnCount()]):
                 self.library_table.setColumnWidth(index, width)
@@ -1251,12 +1252,10 @@ class MusicDuplicatesView(QWidget):
                     self.library_table.setColumnWidth(index, default_width)
 
     def _restore_library_header_state(self):
-        from src.utils.app_config import AppConfig
-
         header = self.library_table.horizontalHeader()
         if header is None:
             return
-        order = AppConfig().get_music_library_column_order()
+        order = self.app_config.get_music_library_column_order()
         if not order:
             order = list(self.LIBRARY_COLUMN_DEFAULT_ORDER)
         if len(order) < self.library_table.columnCount():
@@ -1285,8 +1284,6 @@ class MusicDuplicatesView(QWidget):
     def _save_library_header_state(self, *args):
         if self._restoring_library_header:
             return
-        from src.utils.app_config import AppConfig
-
         header = self.library_table.horizontalHeader()
         if header is None:
             return
@@ -1297,8 +1294,8 @@ class MusicDuplicatesView(QWidget):
             ]
         except Exception:
             return
-        AppConfig().set_music_library_column_order(order)
-        AppConfig().set_music_library_header_state(
+        self.app_config.set_music_library_column_order(order)
+        self.app_config.set_music_library_header_state(
             ",".join(str(value) for value in order)
         )
 
@@ -1308,9 +1305,7 @@ class MusicDuplicatesView(QWidget):
         self._apply_saved_visible_columns()
 
     def _apply_saved_visible_columns(self):
-        from src.utils.app_config import AppConfig
-
-        visible_columns = set(AppConfig().get_music_library_visible_columns())
+        visible_columns = set(self.app_config.get_music_library_visible_columns())
         if not visible_columns:
             visible_columns = set(self.LIBRARY_DEFAULT_VISIBLE_COLUMNS)
         visible_columns.update({self.LIBRARY_SELECT_COLUMN, self.LIBRARY_FILE_COLUMN})
@@ -1318,8 +1313,6 @@ class MusicDuplicatesView(QWidget):
             self.library_table.setColumnHidden(index, index not in visible_columns)
 
     def _save_visible_columns(self):
-        from src.utils.app_config import AppConfig
-
         visible_columns = [
             index
             for index in range(self.library_table.columnCount())
@@ -1329,24 +1322,20 @@ class MusicDuplicatesView(QWidget):
             visible_columns.insert(0, self.LIBRARY_SELECT_COLUMN)
         if self.LIBRARY_FILE_COLUMN not in visible_columns:
             visible_columns.insert(1, self.LIBRARY_FILE_COLUMN)
-        AppConfig().set_music_library_visible_columns(sorted(set(visible_columns)))
+        self.app_config.set_music_library_visible_columns(sorted(set(visible_columns)))
 
     def _restore_library_splitter_sizes(self):
-        from src.utils.app_config import AppConfig
-
         if not hasattr(self, "library_splitter"):
             return
         sizes = self._normalize_library_splitter_sizes(
-            AppConfig().get_music_library_splitter_sizes()
+            self.app_config.get_music_library_splitter_sizes()
         )
         self.library_splitter.setSizes(sizes)
 
     def _save_library_splitter_sizes(self, *args):
-        from src.utils.app_config import AppConfig
-
         if not hasattr(self, "library_splitter"):
             return
-        AppConfig().set_music_library_splitter_sizes(
+        self.app_config.set_music_library_splitter_sizes(
             self._normalize_library_splitter_sizes(self.library_splitter.sizes())
         )
         self._rerender_cover_preview_label(getattr(self, "library_cover_label", None))
@@ -1407,19 +1396,33 @@ class MusicDuplicatesView(QWidget):
         else:
             self._checked_library_paths.discard(file_path)
 
-    def _save_column_widths(self):
-        if self._restoring_library_header:
-            return
-        from src.utils.app_config import AppConfig
+    @property
+    def app_config(self):
+        if self._app_config is None:
+            from src.utils.app_config import get_app_config
+            self._app_config = get_app_config()
+        return self._app_config
 
+    def _current_column_widths(self) -> list[int]:
         header = self.library_table.horizontalHeader()
-        widths = [
+        return [
             header.sectionSize(i)
             if header is not None
             else self.library_table.columnWidth(i)
             for i in range(self.library_table.columnCount())
         ]
-        AppConfig().set_music_library_column_widths(widths)
+
+    def _save_column_widths(self, *args):
+        if self._restoring_library_header or not self.isVisible():
+            # Durante la construcción (o con la vista oculta) los anchos son
+            # los restaurados o los del layout inicial: no hay nada que guardar.
+            return
+        self._column_widths_timer.start()
+
+    def _flush_column_widths(self):
+        widths = self._current_column_widths()
+        if widths != self.app_config.get_music_library_column_widths():
+            self.app_config.set_music_library_column_widths(widths)
 
     def _reset_table_layout(self):
         header = self.library_table.horizontalHeader()

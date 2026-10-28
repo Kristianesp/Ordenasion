@@ -18,7 +18,8 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import Theme, isDarkTheme, setTheme, setThemeColor, FluentStyleSheet, getStyleSheet
 
-from src.utils.app_config import AppConfig
+from src.utils.app_config import AppConfig, get_app_config
+
 
 _FONTS_DIR = Path(__file__).resolve().parents[3] / "assets" / "fonts"
 _BUNDLED_FONTS_REGISTERED = False
@@ -351,7 +352,7 @@ def _config_from_widget(widget: QWidget) -> AppConfig:
         if isinstance(config, AppConfig):
             return config
         current = current.parentWidget()
-    return AppConfig()
+    return get_app_config()
 
 
 def apply_control_size(widget: QWidget, config: AppConfig | None = None) -> None:
