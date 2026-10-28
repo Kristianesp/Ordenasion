@@ -57,7 +57,6 @@ def run_smoke(start_window):
                 denied = AssertionError("Servicio externo no permitido durante smoke")
                 with contextlib.ExitStack() as guards:
                     guards.enter_context(patch.object(FileOrganizerGUI, "_init_disk_manager", lambda self: None))
-                    guards.enter_context(patch.object(FileOrganizerGUI, "_refresh_disk_viewer_after_theme", lambda *_: None))
                     guards.enter_context(patch.object(FileOrganizerGUI, "start_analysis", side_effect=denied))
                     guards.enter_context(patch.object(DiskManager, "get_all_disks", side_effect=denied))
                     guards.enter_context(patch.object(audio_metadata_service, "update_track_tags", side_effect=denied))
@@ -83,7 +82,8 @@ def run_smoke(start_window):
                             assert not window.windowIcon().isNull()
                             assert app.applicationVersion() == APP_VERSION
                             assert APP_VERSION in window.windowTitle()
-                            assert window._routes["disks"].space_page._worker is None
+                            disks_page = window.built_page("disks")
+                            assert disks_page is None or disks_page.space_page._worker is None
                             assert not window.grab().isNull()
                             report["first_frame"] = True
                             report["routes"] = list(window._routes)

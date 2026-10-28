@@ -57,3 +57,20 @@ def user_data_file(name: str) -> Path:
             except OSError:
                 continue
     return target
+
+
+def open_in_file_manager(path) -> bool:
+    """Abre ``path`` en el Explorador (Windows) o el gestor de archivos del sistema."""
+    target = Path(path)
+    if not target.exists():
+        return False
+    if sys.platform == "win32":
+        try:
+            os.startfile(str(target))  # type: ignore[attr-defined]
+            return True
+        except OSError:
+            return False
+    from PyQt6.QtCore import QUrl
+    from PyQt6.QtGui import QDesktopServices
+
+    return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))))

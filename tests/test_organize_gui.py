@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox, QTextEdit
 
 from src.gui import main_window as module
+from src.gui import organize_controller
 from src.gui.main_window import FileOrganizerGUI
 from src.utils.app_config import AppConfig
 
@@ -55,47 +56,48 @@ def test_loading_profile_keeps_protected_paths_and_folder(tmp_path):
     assert facade._profile_exclusions == [str(tmp_path / "excluida")]
 
 
-class _LogHost(QObject):
-    LOG_FLUSH_INTERVAL_MS = FileOrganizerGUI.LOG_FLUSH_INTERVAL_MS
-    log_message = FileOrganizerGUI.log_message
-    _flush_log = FileOrganizerGUI._flush_log
-    get_log_entry_count = FileOrganizerGUI.get_log_entry_count
-    update_log_info = FileOrganizerGUI.update_log_info
+def _controller(tmp_path):
+    from src.core.transaction_manager import TransactionManager
+    from src.gui.organize_controller import OrganizeController
 
-    def __init__(self):
-        super().__init__()
-        self.log_text = QTextEdit()
-        self.log_info_label = QLabel()
-        self._pending_task_messages = {}
+    return OrganizeController(TransactionManager(str(tmp_path / "ops.jsonl")))
 
 
-def test_log_messages_are_batched_and_counted_incrementally():
+def test_log_messages_are_batched_and_counted_incrementally(tmp_path):
     _app()
-    host = _LogHost()
+    controller = _controller(tmp_path)
+    batches = []
+    controller.log_appended.connect(batches.append)
     for index in range(500):
-        host.log_message(f"mensaje {index}")
-    # Nada se pinta hasta el volcado del temporizador
-    assert host.log_text.toPlainText() == ""
-    assert host._log_flush_timer.isActive()
-    host._flush_log()
-    assert host.get_log_entry_count() == 500
-    assert "500" in host.log_info_label.text()
-    assert host.log_text.document().blockCount() == 500
+        controller.log(f"mensaje {index}")
+    # Nada se emite hasta el volcado del temporizador
+    assert batches == []
+    assert controller._log_flush_timer.isActive()
+    controller.flush_log()
+    assert controller.log_entry_count == 500
+    assert len(batches) == 1 and len(batches[0]) == 500
+    view = QTextEdit()
+    for line in controller.log_history():
+        view.append(line)
+    assert view.document().blockCount() == 500
+    exported = tmp_path / "registro.txt"
+    assert controller.export_log(str(exported)) == 500
+    assert "mensaje 499" in exported.read_text(encoding="utf-8")
 
 
-def test_task_progress_is_throttled(monkeypatch):
+def test_task_progress_is_throttled(tmp_path, monkeypatch):
     _app()
-    host = _LogHost()
+    controller = _controller(tmp_path)
     updates = []
-    monkeypatch.setattr(module.task_registry, "update_task", lambda task, msg: updates.append((task, msg)))
+    monkeypatch.setattr(organize_controller.task_registry, "update_task", lambda task, msg: updates.append((task, msg)))
     for index in range(100):
-        FileOrganizerGUI._handle_task_progress(host, "t1", f"archivo {index}")
+        controller.handle_task_progress("t1", f"archivo {index}")
     assert updates == []
-    host._flush_log()
+    controller.flush_log()
     assert updates == [("t1", "archivo 99")]
 
 
-class _FakeWorker(module.OrganizeWorker):
+class _FakeWorker(organize_controller.OrganizeWorker):
     def __init__(self):
         QObject.__init__(self)
         self.stopped = False
@@ -112,12 +114,12 @@ class _FakeWorker(module.OrganizeWorker):
         return True
 
 
-def test_close_asks_and_waits_for_running_organization(monkeypatch):
+def test_close_asks_and_waits_for_running_organization(tmp_path, monkeypatch):
     _app()
     worker = _FakeWorker()
-    facade = SimpleNamespace(_active_workers=[worker], _shutdown_done=False)
-    facade.has_running_organization = lambda: FileOrganizerGUI.has_running_organization(facade)
-    facade._shutdown_workers = lambda: FileOrganizerGUI._shutdown_workers(facade)
+    controller = _controller(tmp_path)
+    controller.active_workers.append(worker)
+    facade = SimpleNamespace(controller=controller, _dialog_parent=lambda: None)
 
     monkeypatch.setattr(module.QMessageBox, "question", MagicMock(return_value=QMessageBox.StandardButton.No))
     assert FileOrganizerGUI.request_shutdown(facade) is False
@@ -151,6 +153,12 @@ def test_summary_dialog_shows_status_and_offers_partial_undo():
 
 class _Controller(QObject):
     operation_state_changed = pyqtSignal()
+    log_appended = pyqtSignal(list)
+    log_cleared = pyqtSignal()
+    log_entry_count = 0
+
+    def log_history(self):
+        return []
 
     def __init__(self, entries):
         super().__init__()
@@ -180,7 +188,7 @@ def test_activity_page_lists_history_with_undo_per_entry():
          "moves": 5, "source_folder": "C:/Fotos", "can_undo": False, "undo_state": "deshecha"},
     ]
     controller = _Controller(entries)
-    page = ActivityPage(controller, QTextEdit())
+    page = ActivityPage(controller)
     assert [entry[0] for entry in page.history_entries] == ["txn_2", "txn_1"]
     first_undo, second_undo = page.history_entries[0][1], page.history_entries[1][1]
     assert first_undo.isEnabled() and not second_undo.isEnabled()
@@ -195,8 +203,6 @@ def test_activity_page_lists_history_with_undo_per_entry():
 
 def test_rollback_transaction_runs_in_background(tmp_path, monkeypatch):
     _app()
-    from src.core.transaction_manager import TransactionManager
-
     started = []
 
     class _Worker(QObject):
@@ -210,20 +216,18 @@ def test_rollback_transaction_runs_in_background(tmp_path, monkeypatch):
         def start(self):
             started.append(self.txn)
 
-    monkeypatch.setattr(module, "RollbackWorker", _Worker)
-    monkeypatch.setattr(module.task_registry, "start_task", MagicMock())
-    facade = SimpleNamespace(
-        current_organize_task_id=None, current_rollback_task_id=None,
-        last_transaction_id="txn_a", transaction_manager=TransactionManager(str(tmp_path / "ops.jsonl")),
-        _active_workers=[], rollback_btn=MagicMock(), organize_btn=MagicMock(),
-        log_message=MagicMock(), operation_state_changed=MagicMock(),
-        on_rollback_finished=MagicMock(), _cleanup_worker=MagicMock(),
-    )
+    monkeypatch.setattr(organize_controller, "RollbackWorker", _Worker)
+    monkeypatch.setattr(organize_controller.task_registry, "start_task", MagicMock())
+    controller = _controller(tmp_path)
+    controller.last_transaction_id = "txn_a"
+    facade = SimpleNamespace(controller=controller, rollback_btn=MagicMock(), organize_btn=MagicMock(),
+                             _dialog_parent=lambda: None)
     assert FileOrganizerGUI.rollback_transaction(facade, "txn_b", confirm=False)
     assert started == ["txn_b"]
-    assert facade.current_rollback_task_id
+    assert controller.current_rollback_task_id
     # Mientras se deshace no se puede lanzar otra operación
     assert not FileOrganizerGUI.rollback_transaction(facade, "txn_a", confirm=False)
+    assert not controller.start_rollback("txn_a")
 
 
 def test_preview_tolerates_vanished_files_and_flags_category_folders(tmp_path):

@@ -23,6 +23,8 @@ class BackgroundTaskRegistry(QObject):
     """Registro compartido de tareas en segundo plano."""
 
     tasks_updated = pyqtSignal()
+    task_started = pyqtSignal(str, str)  # id, título
+    task_finished = pyqtSignal(str, str, str)  # id, título, estado final
 
     def __init__(self):
         super().__init__()
@@ -42,6 +44,7 @@ class BackgroundTaskRegistry(QObject):
             "last_message": "",
             "cancel_callback": cancel_callback,
         }
+        self.task_started.emit(task_id, title)
         self.tasks_updated.emit()
 
     def update_task(self, task_id: str, message: str):
@@ -57,6 +60,7 @@ class BackgroundTaskRegistry(QObject):
             return
         task["status"] = status
         task["ended_at"] = datetime.now()
+        self.task_finished.emit(task_id, task["title"], status)
         self.tasks_updated.emit()
 
     def cancel_task(self, task_id: str):
@@ -70,6 +74,12 @@ class BackgroundTaskRegistry(QObject):
             callback()
         task["status"] = "Cancelación solicitada"
         self.tasks_updated.emit()
+
+    ACTIVE_STATUSES = frozenset({"En progreso", "Cancelación solicitada"})
+
+    def active_count(self) -> int:
+        """Número de tareas que siguen en marcha."""
+        return sum(task["status"] in self.ACTIVE_STATUSES for task in self._tasks.values())
 
     def get_tasks(self) -> list[tuple[str, dict]]:
         return list(self._tasks.items())

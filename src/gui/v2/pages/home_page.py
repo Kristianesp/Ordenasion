@@ -8,7 +8,7 @@ from src.gui.task_center import task_registry
 from src.gui.v2.components import ActionBar, GlassCard, MetricCard, PageHeader
 from src.gui.v2.dashboard_charts import DiskUsageChart, FolderSizeChart, disk_values, usage_percent_of
 from src.gui.v2.space_map import format_bytes
-from src.gui.v2.theme import ElidedPathLabel, current_tokens, typography_scale
+from src.gui.v2.theme import ElidedPathLabel, set_themed_stylesheet, typography_scale
 from src.utils.app_config import AppConfig
 
 
@@ -197,10 +197,12 @@ class HomePage(ScrollArea):
         self.refresh_theme()
 
     def refresh_theme(self):
-        tokens = current_tokens(self.config.get_accent_color(), self.config.get_theme_mode())
         size = max(22, typography_scale(self.config).display + 2)
         for card in self.metric_cards:
-            card.value_label.setStyleSheet(f"color: {tokens.text_primary}; background: transparent; font-size: {size}px; font-weight: 600;")
+            set_themed_stylesheet(
+                card.value_label,
+                lambda tokens: f"color: {tokens.text_primary}; background: transparent; font-size: {size}px; font-weight: 600;",
+                self.config)
         self.usage_chart.update()
         self.folders_chart.update()
 

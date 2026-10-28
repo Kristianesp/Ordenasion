@@ -88,23 +88,23 @@ def test_review_confirms_selection_exactly_once(tmp_path, monkeypatch, accepted)
     preview.get_conflict_policy.return_value = "skip"
     preview_factory = MagicMock(return_value=preview)
     monkeypatch.setattr(module, "PreviewDialog", preview_factory)
+    from src.core.transaction_manager import TransactionManager
+    from src.gui import organize_controller
     worker = MagicMock()
     worker_factory = MagicMock(return_value=worker)
-    monkeypatch.setattr(module, "OrganizeWorker", worker_factory)
-    monkeypatch.setattr(module.task_registry, "start_task", MagicMock())
+    monkeypatch.setattr(organize_controller, "OrganizeWorker", worker_factory)
+    monkeypatch.setattr(organize_controller.task_registry, "start_task", MagicMock())
+    controller = organize_controller.OrganizeController(TransactionManager(str(tmp_path / "ops.jsonl")))
     facade = SimpleNamespace(
         _get_effective_selected_movements=lambda: ([], selected),
         folder_input=SimpleNamespace(text=lambda: str(tmp_path)),
         organize_by_date_checkbox=SimpleNamespace(isChecked=lambda: False),
         check_duplicates_checkbox=SimpleNamespace(isChecked=lambda: False),
         app_config=AppConfig(str(tmp_path / "config.json")),
-        current_organize_task_id=None, _active_workers=[],
-        current_analysis_task_id=None,
+        controller=controller,
         _analysis_result_path=os.path.normcase(os.path.realpath(tmp_path)),
-        organize_btn=MagicMock(), rollback_btn=MagicMock(), operation_state_changed=MagicMock(),
-        log_message=MagicMock(), _handle_task_progress=MagicMock(),
-        on_organize_complete=MagicMock(), on_rollback_available=MagicMock(),
-        on_operation_summary_ready=MagicMock(), _cleanup_worker=MagicMock(),
+        organize_btn=MagicMock(), rollback_btn=MagicMock(),
+        log_message=MagicMock(), _dialog_parent=lambda: None,
     )
     module.FileOrganizerGUI.start_organization(facade)
     if accepted:
@@ -116,7 +116,7 @@ def test_review_confirms_selection_exactly_once(tmp_path, monkeypatch, accepted)
         worker.start.assert_called_once()
     else:
         worker_factory.assert_not_called()
-        assert facade.current_organize_task_id is None
+        assert controller.current_organize_task_id is None
 
 
 def test_preview_accounts_for_conflicts_between_selected_files(tmp_path):
@@ -144,15 +144,16 @@ def test_changed_folder_cannot_review_old_selection(tmp_path, monkeypatch):
     monkeypatch.setattr(module.QMessageBox, "warning", warning)
     preview_factory = MagicMock()
     monkeypatch.setattr(module, "PreviewDialog", preview_factory)
+    controller = SimpleNamespace(busy=False)
     facade = SimpleNamespace(
-        current_organize_task_id=None, current_analysis_task_id=None,
+        controller=controller, _dialog_parent=lambda: None,
         folder_input=SimpleNamespace(text=lambda: str(other)),
         _analysis_result_path=os.path.normcase(os.path.realpath(tmp_path)),
     )
     module.FileOrganizerGUI.start_organization(facade)
     preview_factory.assert_not_called()
     warning.assert_called_once()
-    facade.current_analysis_task_id = "running"
+    controller.busy = True
     facade._analysis_result_path = os.path.normcase(os.path.realpath(other))
     module.FileOrganizerGUI.start_organization(facade)
     preview_factory.assert_not_called()

@@ -78,7 +78,6 @@ def main():
                                       (audio_fingerprint_service, "get_cover_art_bytes_for_url")):
                     guards.enter_context(patch.object(owner, method, side_effect=denied))
                 guards.enter_context(patch.object(FileOrganizerGUI, "_init_disk_manager", lambda *_: None))
-                guards.enter_context(patch.object(FileOrganizerGUI, "_refresh_disk_viewer_after_theme", lambda *_: None))
                 guards.enter_context(patch("socket.create_connection", side_effect=denied))
                 guards.enter_context(patch("urllib.request.urlopen", side_effect=denied))
                 app = QApplication.instance() or QApplication([])
@@ -99,15 +98,16 @@ def main():
                 assert social.save(str(OUTPUT / "social-preview.png"))
                 config = AppConfig(str(Path(temporary) / "capture-config.json"))
                 config.set_theme_mode("dark")
-                controller = FileOrganizerGUI(app_config_ref=config)
+                controller = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
                 window = FluentAppWindow(controller)
                 window.setWindowTitle("Ordenasion 3.5.0 · DEMO / datos ficticios")
                 window.resize(1440, 960)
                 window.show()
+                disks_page = window.page("disks")
                 viewer = controller.disk_viewer
                 viewer.available_disks = [drive]
                 viewer.disks_updated_at = datetime(2026, 9, 27, 12, 30)
-                space = window._routes["disks"].space_page
+                space = disks_page.space_page
                 space.path_input.setText(result.root_path)
                 space._completed(0, result)
 

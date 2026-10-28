@@ -20,7 +20,7 @@ def shell(tmp_path_factory):
         patch.setattr(FileOrganizerGUI, "_init_disk_manager", lambda self: None)
         config = AppConfig(str(tmp_path_factory.mktemp("shortcuts") / "config.json"))
         config.set_theme_mode("light")
-        legacy = FileOrganizerGUI(app_config_ref=config)
+        legacy = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
         window = FluentAppWindow(legacy)
         window.resize(1280, 720)
         window.show()
@@ -162,7 +162,7 @@ def test_last_result_offers_undo(shell, monkeypatch):
 def test_space_organize_request_starts_analysis(shell, monkeypatch):
     start = MagicMock()
     monkeypatch.setattr(shell.legacy_window, "start_analysis", start)
-    shell._routes["disks"].space_page.organize_requested.emit("/tmp")
+    shell.page("disks").space_page.organize_requested.emit("/tmp")
     start.assert_called_once()
     assert shell.legacy_window.folder_input.text() == "/tmp"
 
@@ -174,3 +174,37 @@ def test_close_asks_legacy_shutdown_first(shell, monkeypatch):
     shell.close()
     assert shell.isVisible()
     shutdown.assert_not_called()
+
+
+def test_heavy_pages_are_built_on_first_navigation(tmp_path):
+    from src.gui.main_window import FileOrganizerGUI
+    from src.gui.v2.app_window import FluentAppWindow, LazyPage
+
+    app = QApplication.instance()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(FileOrganizerGUI, "_init_disk_manager", lambda self: None)
+        config = AppConfig(str(tmp_path / "config.json"))
+        legacy = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
+        assert legacy.main_tabs is None
+        assert legacy.disk_viewer is None and legacy.music_duplicates_view is None
+        assert legacy.duplicates_dashboard is None
+        window = FluentAppWindow(legacy)
+        window.resize(1280, 720)
+        window.show()
+        app.processEvents()
+        for route in ("disks", "music", "duplicates"):
+            assert isinstance(window._routes[route], LazyPage)
+            assert window.built_page(route) is None
+        # Navegación por clic: el marcador primero y la página en la siguiente vuelta
+        window.switchTo(window._routes["music"])
+        assert window.built_page("music") is None
+        QTest.qWait(50)
+        assert window.built_page("music") is not None
+        assert legacy.music_duplicates_view is not None
+        # Navegación programática: construcción inmediata
+        window._switch_route("space")
+        assert window.built_page("disks").space_page.isVisible()
+        assert legacy.disk_viewer is not None
+        assert window.built_page("duplicates") is None
+        window.close()
+        app.processEvents()

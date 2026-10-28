@@ -2,7 +2,7 @@
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QWidget
-from qfluentwidgets import PushButton, TransparentPushButton
+from qfluentwidgets import FluentIcon, PushButton
 
 from src.gui.v2.pages.legacy_page import LegacyPage
 from src.gui.v2.theme import apply_control_size
@@ -40,16 +40,14 @@ class OrganizePage(LegacyPage):
         if legacy_tasks_button is not None:
             legacy_tasks_button.hide()
 
-        config_button = TransparentPushButton()
-        config_button.setText("Configurar")
+        config_button = PushButton(FluentIcon.SETTING, "Configurar")
         config_button.setObjectName("organizeConfigAction")
         config_button.setAccessibleName("Abrir configuración")
         config_button.setMinimumWidth(96)
         apply_control_size(config_button, self.config)
         config_button.clicked.connect(controller.open_configuration)
 
-        tasks_button = PushButton()
-        tasks_button.setText("Tareas")
+        tasks_button = PushButton(FluentIcon.SYNC, "Tareas")
         tasks_button.setObjectName("organizeTasksAction")
         tasks_button.setAccessibleName("Abrir tareas")
         tasks_button.setMinimumWidth(82)

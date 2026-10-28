@@ -23,6 +23,10 @@ from src.utils.app_config import AppConfig, get_app_config
 
 _FONTS_DIR = Path(__file__).resolve().parents[3] / "assets" / "fonts"
 _BUNDLED_FONTS_REGISTERED = False
+_PREFERRED_FAMILY: str | None = None
+# Hojas de estilo ya generadas, por firma visual (acento, claro/oscuro,
+# densidad, tamaño, escala y familia): cambiar de tema no las recompone.
+_QSS_CACHE: dict[tuple, str] = {}
 _CONTROL_TYPE_NAMES = frozenset(
     {
         "PushButton",
@@ -294,7 +298,18 @@ def responsive_font_size(
 
 
 def preferred_font_family() -> str:
-    """Prefiere Nunito embebida y mantiene una cadena de fallback para Windows."""
+    """Prefiere Nunito embebida y mantiene una cadena de fallback para Windows.
+
+    Se resuelve una vez: QFontDatabase.families() es caro y la escala de
+    tipografía se consulta por cada control.
+    """
+    global _PREFERRED_FAMILY
+    if _PREFERRED_FAMILY is None:
+        _PREFERRED_FAMILY = _resolve_font_family()
+    return _PREFERRED_FAMILY
+
+
+def _resolve_font_family() -> str:
     register_bundled_fonts()
     available = set(QFontDatabase.families())
     for family in (
@@ -442,19 +457,54 @@ def apply_elided_path(label: QLabel, text: str, tooltip: str | None = None) -> N
     )
 
 
+def theme_signature(config: AppConfig) -> tuple:
+    """Firma de todo lo que cambia el aspecto: sirve de clave de caché."""
+    metrics = typography_scale(config)
+    return (config.get_accent_color().upper(), current_tokens(None, config.get_theme_mode()).canvas,
+            metrics.body, metrics.compact, metrics.family)
+
+
+def cached_stylesheet(name: str, config: AppConfig, builder) -> str:
+    key = (name, *theme_signature(config))
+    qss = _QSS_CACHE.get(key)
+    if qss is None:
+        qss = _QSS_CACHE[key] = builder(config)
+    return qss
+
+
 def apply_fluent_theme(config: AppConfig) -> FluentTokens:
-    """Aplica tema, acento y tipografía una sola vez a la aplicación."""
+    """Aplica tema, acento y tipografía a la aplicación, solo si cambian.
+
+    qfluentwidgets re-aplica el QSS de todos sus widgets en setTheme y en
+    setThemeColor; se hace una única pasada, y diferida (``lazy``) para los
+    que no están visibles: se actualizan al pintarse. Los estilos propios de
+    los controles van como QSS personalizado (setCustomStyleSheet), así que
+    esa pasada no los pierde.
+    """
+    from qfluentwidgets import qconfig
+    from qfluentwidgets.common.style_sheet import updateStyleSheet
+
     register_bundled_fonts()
     mode = config.get_theme_mode()
     accent = config.get_accent_color()
-    setTheme(_to_theme(mode))
+    theme = _to_theme(mode)
     app = QApplication.instance()
-    if app is not None:
-        # FileOrganizerGUI aplica un QSS global heredado durante su arranque.
-        # La V2 debe usar la paleta Fluent y estilos locales, no ese QSS.
+    if app is not None and app.styleSheet():
+        # Un QSS global (p. ej. de una ventana heredada) taparía la paleta Fluent.
         app.setStyleSheet("")
-    if QColor(accent).isValid():
-        setThemeColor(accent)
+    previous_dark = isDarkTheme()
+    previous_color = QColor(qconfig.get(qconfig.themeColor))
+    color_changed = QColor(accent).isValid() and previous_color != QColor(accent)
+    if color_changed:
+        qconfig.set(qconfig.themeColor, QColor(accent), save=False)
+    # setTheme resuelve AUTO; comparar después decide si hay que repintar.
+    qconfig.set(qconfig.themeMode, theme, False)
+    if theme == Theme.AUTO:
+        qconfig.theme = Theme.AUTO  # vuelve a detectar el esquema del sistema
+    if color_changed or isDarkTheme() != previous_dark or not getattr(apply_fluent_theme, "_applied", False):
+        updateStyleSheet(lazy=getattr(apply_fluent_theme, "_applied", False))
+        qconfig.themeChangedFinished.emit()
+    apply_fluent_theme._applied = True
 
     if app is not None:
         metrics = typography_scale(config)
@@ -462,9 +512,32 @@ def apply_fluent_theme(config: AppConfig) -> FluentTokens:
         if metrics.family:
             font.setFamily(metrics.family)
         font.setPixelSize(metrics.body)
-        app.setFont(font)
+        if app.font() != font:
+            app.setFont(font)
         apply_fluent_palette(app, config)
     return current_tokens(accent, mode)
+
+
+def set_themed_stylesheet(widget: QWidget, build, config: AppConfig) -> None:
+    """QSS que depende del tema: ``build(tokens) -> str``.
+
+    Si qfluentwidgets gestiona el widget, se registra como estilo
+    personalizado claro y oscuro: su cambio de tema (también el diferido de
+    los widgets ocultos) lo conserva en lugar de sobrescribirlo.
+    """
+    from qfluentwidgets import setCustomStyleSheet
+    from qfluentwidgets.common.style_sheet import styleSheetManager
+
+    accent = config.get_accent_color()
+    if widget in styleSheetManager.widgets:
+        light = build(current_tokens(accent, "light"))
+        dark = build(current_tokens(accent, "dark"))
+        if (widget.property("lightCustomQss"), widget.property("darkCustomQss")) != (light, dark):
+            setCustomStyleSheet(widget, light, dark)
+    else:
+        qss = build(current_tokens(accent, config.get_theme_mode()))
+        if widget.styleSheet() != qss:
+            widget.setStyleSheet(qss)
 
 
 def apply_fluent_palette(widget: QWidget | QApplication, config: AppConfig) -> None:
@@ -613,7 +686,11 @@ def apply_menu_surface(menu, config: AppConfig | None = None) -> FluentTokens:
 
 
 def fluent_window_stylesheet(config: AppConfig) -> str:
-    """Estilos locales del shell V2, separados del QSS heredado."""
+    """Estilos locales del shell V2, separados del QSS heredado (cacheado)."""
+    return cached_stylesheet("window", config, _build_fluent_window_stylesheet)
+
+
+def _build_fluent_window_stylesheet(config: AppConfig) -> str:
     tokens = current_tokens(
         config.get_accent_color(),
         config.get_theme_mode(),
@@ -766,6 +843,12 @@ def fluent_window_stylesheet(config: AppConfig) -> str:
             {font_family_rule}
             font-size: {metrics.body}px;
         }}
+        QWidget#fluentAppWindow SegmentedItem {{
+            /* Hereda la regla de PushButton; su relleno (6 px) o su relleno
+               y margen (3 + 3 px) suman 12 px a la altura del contenido. */
+            min-height: {max(1, metrics.control_height - 12)}px;
+            max-height: {max(1, metrics.control_height - 12)}px;
+        }}
         QWidget#fluentAppWindow PushButton:hover,
         QWidget#fluentAppWindow QPushButton:hover,
         QWidget#fluentAppWindow QToolButton:hover {{
@@ -881,7 +964,11 @@ def fluent_window_stylesheet(config: AppConfig) -> str:
 
 
 def legacy_surface_stylesheet(config: AppConfig) -> str:
-    """QSS acotado para controles Qt heredados dentro de páginas V2."""
+    """QSS acotado para controles Qt heredados dentro de páginas V2 (cacheado)."""
+    return cached_stylesheet("legacy", config, _build_legacy_surface_stylesheet)
+
+
+def _build_legacy_surface_stylesheet(config: AppConfig) -> str:
     tokens = current_tokens(
         config.get_accent_color(),
         config.get_theme_mode(),
@@ -1292,7 +1379,13 @@ def legacy_surface_stylesheet(config: AppConfig) -> str:
 
 def apply_legacy_surface_style(widget: QWidget, config: AppConfig) -> None:
     widget.setObjectName("legacySurface")
-    widget.setStyleSheet(legacy_surface_stylesheet(config))
+    qss = legacy_surface_stylesheet(config)
+    if widget.styleSheet() != qss:
+        widget.setStyleSheet(qss)
     apply_fluent_palette(widget, config)
     widget.setAutoFillBackground(False)
-    apply_control_sizes(widget, config)
+    signature = theme_signature(config)
+    # Las alturas de control solo dependen de tipo y densidad, no del tema.
+    if getattr(widget, "_control_size_signature", None) != signature[2:]:
+        widget._control_size_signature = signature[2:]
+        apply_control_sizes(widget, config)

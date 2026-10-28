@@ -38,14 +38,14 @@ class DiskViewer(QWidget):
     analysis_requested = pyqtSignal(str)
     disks_refreshed = pyqtSignal(object)  # Snapshot existente, sin lecturas adicionales
 
-    def __init__(self, parent=None, disk_manager=None):
+    def __init__(self, parent=None, disk_manager=None, app_config: Optional[AppConfig] = None):
         super().__init__(parent)
         self.disk_manager = disk_manager
         self.current_selection: Optional[str] = None
         self.available_disks: tuple = ()
         self.disks_updated_at: Optional[datetime] = None
         self.disks_refresh_error: Optional[str] = None
-        self._fallback_config: Optional[AppConfig] = None
+        self._fallback_config: Optional[AppConfig] = app_config
         self._shown_disk: Optional[DiskInfo] = None
         self._last_report = None
         self._report_request = 0
@@ -417,7 +417,9 @@ class DiskViewer(QWidget):
             self._render_report(self._shown_disk, self._last_report)
 
     def _get_runtime_config(self) -> AppConfig:
-        """Configuración viva del shell; si no hay, una única instancia propia."""
+        """Configuración inyectada o la del shell; si no, la compartida del proceso."""
+        if self._fallback_config is not None:
+            return self._fallback_config
         widget = self.parentWidget()
         while widget is not None:
             config = getattr(widget, "config", None)

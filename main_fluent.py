@@ -21,7 +21,7 @@ def create_window():
     from src.gui.v2.app_window import FluentAppWindow
 
     config = AppConfig()
-    legacy_window = FileOrganizerGUI(app_config_ref=config)
+    legacy_window = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
     return FluentAppWindow(legacy_window)
 
 
