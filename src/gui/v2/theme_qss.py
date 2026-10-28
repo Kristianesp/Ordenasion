@@ -4,7 +4,8 @@ diálogos y menús. Se cachean por firma visual (acento, claro/oscuro, tipo).
 
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import QTextEdit, QWidget
-from qfluentwidgets import FluentStyleSheet, getStyleSheet
+from qfluentwidgets import FluentStyleSheet, getStyleSheet, setCustomStyleSheet
+from qfluentwidgets.common.style_sheet import styleSheetManager
 
 from src.gui.v2.theme_tokens import (
     FluentTokens, contrasting_foreground, current_glass, current_tokens, theme_signature, typography_scale,
@@ -25,11 +26,27 @@ def cached_stylesheet(name: str, config: AppConfig, builder) -> str:
     return qss
 
 
+def _set_custom_qss(widget: QWidget, qss: str, persistent: bool = True) -> None:
+    """QSS añadido al de qfluentwidgets (sobrevive a sus cambios de tema).
+
+    ``persistent=False`` lo añade directamente: qfluentwidgets descarta el
+    estilo personalizado de los objetos que evalúan a falso (una ListWidget
+    vacía, por su ``__len__``).
+    """
+    if persistent and widget in styleSheetManager.widgets:
+        setCustomStyleSheet(widget, qss, qss)
+    elif not widget.styleSheet().endswith(qss):
+        widget.setStyleSheet(widget.styleSheet() + qss)
+
+
 def apply_dialog_surface(dialog: QWidget) -> FluentTokens:
     """Aplica el tema del controlador también a los diálogos fuera del shell."""
     config = _config_from_widget(dialog)
     tokens = current_tokens(config.get_accent_color(), config.get_theme_mode())
     metrics = typography_scale(config)
+    # Misma altura que en el shell: el QSS de la ventana (min-height) también
+    # alcanza a los diálogos hijos, así que el relleno vertical va a cero.
+    inner = max(1, metrics.control_height - 2)
     if not dialog.objectName():
         dialog.setObjectName("fluentDialog")
     name = dialog.objectName()
@@ -40,19 +57,42 @@ def apply_dialog_surface(dialog: QWidget) -> FluentTokens:
             color: {tokens.text_primary}; background: transparent;
             font-size: {metrics.body}px;
         }}
-        {scope} QLabel#preview_header {{ font-size: {metrics.title}px; font-weight: 600; }}
-        {scope} QGroupBox {{ border: 1px solid {tokens.stroke}; border-radius: 8px; margin-top: 12px; padding: 16px 10px 10px; }}
-        {scope} QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; }}
+        {scope} TitleLabel, {scope} QLabel#preview_header {{ font-size: {metrics.display}px; font-weight: 700; }}
+        {scope} SubtitleLabel {{ font-size: {metrics.title}px; font-weight: 600; }}
+        {scope} CaptionLabel {{ font-size: {metrics.small}px; color: {tokens.text_secondary}; }}
+        {scope} QGroupBox {{
+            background: {tokens.surface}; border: 1px solid {tokens.stroke}; border-radius: 12px;
+            margin-top: {metrics.title + 14}px; padding: 12px; font-weight: 600;
+        }}
+        {scope} QGroupBox::title {{
+            subcontrol-origin: margin; subcontrol-position: top left; left: 2px; top: 2px;
+            padding: 0; color: {tokens.text_primary}; font-size: {metrics.title}px;
+        }}
+        {scope} QGroupBox QLabel, {scope} QGroupBox QCheckBox {{ font-weight: 400; }}
+        {scope} QTabWidget::pane {{
+            background: {tokens.surface}; border: 1px solid {tokens.stroke}; border-radius: 12px;
+            top: -1px; padding: 8px;
+        }}
+        {scope} QTabWidget::tab-bar {{ left: 4px; }}
+        {scope} QTabBar::tab {{
+            min-height: {inner}px; padding: 0 16px; margin-right: 4px;
+            color: {tokens.text_secondary}; background: transparent;
+            border: none; border-bottom: 2px solid transparent; font-size: {metrics.body}px;
+        }}
+        {scope} QTabBar::tab:hover {{ color: {tokens.text_primary}; background: {tokens.surface_alt}; }}
+        {scope} QTabBar::tab:selected {{ color: {tokens.text_primary}; border-bottom: 2px solid {tokens.accent}; font-weight: 600; }}
+        {scope} QSplitter::handle {{ background: transparent; width: 12px; }}
         {scope} QLineEdit, {scope} QComboBox, {scope} QAbstractSpinBox {{
             background: {tokens.surface}; color: {tokens.text_primary};
-            border: 1px solid {tokens.stroke}; border-radius: 6px; padding: 5px 8px;
+            border: 1px solid {tokens.stroke}; border-radius: 6px; padding: 0 8px;
+            min-height: {inner}px; max-height: {inner}px;
             selection-background-color: {tokens.accent}; selection-color: {tokens.accent_foreground};
         }}
         {scope} QLineEdit:focus, {scope} QComboBox:focus, {scope} QAbstractSpinBox:focus {{ border-color: {tokens.accent}; }}
         {scope} QLineEdit:disabled, {scope} QComboBox:disabled, {scope} QAbstractSpinBox:disabled {{
             background: {tokens.surface_alt}; color: {tokens.text_secondary};
         }}
-        {scope} QAbstractItemView, {scope} QTextEdit, {scope} QScrollArea {{
+        {scope} QAbstractItemView, {scope} QTextEdit, {scope} QPlainTextEdit, {scope} QScrollArea {{
             background: {tokens.surface}; color: {tokens.text_primary};
             alternate-background-color: {tokens.surface_alt};
             border: 1px solid {tokens.stroke};
@@ -66,8 +106,10 @@ def apply_dialog_surface(dialog: QWidget) -> FluentTokens:
         }}
         {scope} QPushButton {{
             background: {tokens.surface_alt}; color: {tokens.text_primary};
-            border: 1px solid {tokens.stroke}; border-radius: 6px; padding: 6px 12px;
+            border: 1px solid {tokens.stroke}; border-radius: 6px; padding: 0 12px;
+            min-height: {inner}px; max-height: {inner}px; font-size: {metrics.body}px;
         }}
+        {scope} QPushButton[hasIcon="true"] {{ padding: 0 12px 0 36px; }}
         {scope} PrimaryPushButton {{
             background: {tokens.accent}; color: {tokens.accent_foreground}; border-color: {tokens.accent};
         }}
@@ -81,21 +123,43 @@ def apply_dialog_surface(dialog: QWidget) -> FluentTokens:
             background: {tokens.surface_alt}; color: {tokens.text_secondary}; border-color: {tokens.stroke};
         }}
     """)
+    button_size = (f"padding: 0 12px; min-height: {inner}px; max-height: {inner}px; "
+                   f"font-size: {metrics.body}px;")
     for widget in (dialog, *dialog.findChildren(QWidget)):
         apply_fluent_palette(widget, config)
-        if widget.__class__.__name__ == "PrimaryPushButton":
-            # El QSS local de QFluent gana al del QDialog: mantener geometría
-            # e iconos, pero fijar superficie/foreground coherentes al acento.
-            widget.setStyleSheet(getStyleSheet(FluentStyleSheet.BUTTON) + f"""
+        if widget is not dialog and widget.objectName() != "qt_scrollarea_viewport":
+            # La paleta rellena el fondo (canvas) de cada etiqueta o casilla:
+            # sobre tarjetas y pestañas se verían franjas. Solo el diálogo pinta.
+            widget.setAutoFillBackground(False)
+        class_name = widget.__class__.__name__
+        if class_name == "PrimaryPushButton":
+            # El QSS propio de QFluent gana al del QDialog: se añade como
+            # estilo personalizado (qfluentwidgets lo conserva) con la misma
+            # geometría que en el shell y el acento del tema.
+            qss = f"""
                 PrimaryPushButton {{ background: {tokens.accent}; color: {tokens.accent_foreground};
-                    border: 1px solid {tokens.accent}; border-radius: 6px; padding: 6px 12px;
-                    font-size: {metrics.body}px; }}
-                PrimaryPushButton[hasIcon="true"] {{ padding: 6px 12px 6px 36px; }}
+                    border: 1px solid {tokens.accent}; border-radius: 6px; {button_size} }}
+                PrimaryPushButton[hasIcon="false"] {{ padding: 0 12px; }}
+                PrimaryPushButton[hasIcon="true"] {{ padding: 0 12px 0 36px; }}
                 PrimaryPushButton:hover, PrimaryPushButton:pressed, PrimaryPushButton:focus {{
                     background: {tokens.accent}; color: {tokens.accent_foreground}; border-color: {tokens.text_primary}; }}
                 PrimaryPushButton:focus {{ border-width: 2px; }}
                 PrimaryPushButton:disabled {{ background: {tokens.surface_alt}; color: {tokens.text_secondary}; border-color: {tokens.stroke}; }}
-            """)
+            """
+            _set_custom_qss(widget, qss)
+        elif class_name == "ListWidget":
+            # qfluentwidgets la deja sin borde ni fondo: en un formulario se perdería
+            _set_custom_qss(widget, f"ListWidget {{ background: {tokens.surface}; "
+                                    f"border: 1px solid {tokens.stroke}; border-radius: 8px; }}",
+                            persistent=False)
+        elif class_name == "CheckBox":
+            family = f'font-family: "{metrics.family}"; ' if metrics.family else ""
+            _set_custom_qss(widget, f"CheckBox {{ font-size: {metrics.body}px; {family}}}")
+        elif class_name in ("PushButton", "TransparentPushButton", "ToggleButton"):
+            # qfluentwidgets fija el relleno con [hasIcon=false/true] (más específico)
+            qss = (f'{class_name}, {class_name}[hasIcon="false"] {{ {button_size} }} '
+                   f'{class_name}[hasIcon="true"] {{ padding: 0 12px 0 36px; }}')
+            _set_custom_qss(widget, qss)
     for editor in dialog.findChildren(QTextEdit):
         # Fluent instala QSS local en TextEdit; ese QSS prevalece sobre el
         # estilo del diálogo y puede mantener una superficie del tema anterior.

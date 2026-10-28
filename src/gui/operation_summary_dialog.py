@@ -4,7 +4,7 @@ Resumen post-organización.
 """
 
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QTextEdit, QVBoxLayout
-from qfluentwidgets import PrimaryPushButton, PushButton, TitleLabel
+from qfluentwidgets import BodyLabel, FluentIcon, PrimaryPushButton, PushButton, TitleLabel
 from src.gui.v2.theme import apply_dialog_surface
 
 # Texto del estado tal y como lo deja OrganizeWorker en summary["status"]
@@ -40,7 +40,7 @@ class OperationSummaryDialog(QDialog):
         self.undo_requested = False
         self.setWindowTitle("Resumen de organización")
         self.setObjectName("operationSummaryDialog")
-        self.resize(540, 420)
+        self.resize(560, 460)
         self._build_ui()
         apply_dialog_surface(self)
 
@@ -77,7 +77,12 @@ class OperationSummaryDialog(QDialog):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.addWidget(TitleLabel("Resultado de la última ejecución"))
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+        layout.addWidget(TitleLabel("Resultado de la organización"))
+        self.status_label = BodyLabel(summary_status_text(self.summary))
+        self.status_label.setObjectName("summaryStatus")
+        layout.addWidget(self.status_label)
 
         content = QTextEdit()
         content.setReadOnly(True)
@@ -85,10 +90,11 @@ class OperationSummaryDialog(QDialog):
         layout.addWidget(content, 1)
 
         buttons = QHBoxLayout()
+        buttons.setSpacing(12)
         moved = self.summary.get("files_moved", 0) + self.summary.get("folders_moved", 0)
         self.undo_btn = None
         if self.undo_callback is not None and moved and not self.summary.get("undone"):
-            self.undo_btn = PushButton("Deshacer estos cambios")
+            self.undo_btn = PushButton(FluentIcon.RETURN, "Deshacer estos cambios")
             self.undo_btn.setAccessibleName("Deshacer los cambios de esta organización")
             self.undo_btn.clicked.connect(self._request_undo)
             buttons.addWidget(self.undo_btn)
