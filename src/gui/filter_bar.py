@@ -66,7 +66,7 @@ class FilterBar(QWidget):
         self.selection_separator.setVisible(False)
         layout.addWidget(self.selection_separator)
 
-        self.selection_count_label = QLabel("Elementos: 0/0 seleccionados")
+        self.selection_count_label = QLabel("Ningún elemento seleccionado")
         self.selection_count_label.setObjectName("selection_count_label")
         self.selection_count_label.setVisible(False)
         layout.addWidget(self.selection_count_label)
@@ -91,7 +91,7 @@ class FilterBar(QWidget):
 
         self.search_input = LineEdit()
         self.search_input.setAccessibleName("Buscar archivos")
-        self.search_input.setPlaceholderText("Buscar por nombre...")
+        self.search_input.setPlaceholderText("Buscar por nombre…")
         self.search_input.setToolTip("Escribe para filtrar elementos por nombre")
         apply_control_size(self.search_input)
         self.search_input.setMinimumWidth(140)
@@ -104,13 +104,13 @@ class FilterBar(QWidget):
         # Filtro por categoria con ancho minimo
         self.category_filter = ComboBox()
         self.category_filter.setAccessibleName("Filtrar por categoría")
-        self.category_filter.setToolTip("Filtrar por categoria")
+        self.category_filter.setToolTip("Filtrar por categoría")
         apply_control_size(self.category_filter)
         self.category_filter.setMinimumWidth(130)
         self.category_filter.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
-        self.category_filter.addItem("Todas las categorias")
+        self.category_filter.addItem("Todas las categorías")
         for cat in self.categories:
             self.category_filter.addItem(cat)
         self.category_filter.setMinimumWidth(
@@ -130,13 +130,14 @@ class FilterBar(QWidget):
         self.clear_btn.clicked.connect(self.clear_filters)
         layout.addWidget(self.clear_btn)
 
-        self.count_label = QLabel("0 resultados")
-        self.count_label.setToolTip("Numero de elementos visibles")
+        self.count_label = QLabel("")
+        self.count_label.setToolTip("Número de elementos visibles con el filtro actual")
+        self.count_label.setVisible(False)
         self.count_label.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
         layout.addWidget(self.count_label)
-        self.update_selection_summary(0, 0, "0 B", "0 elementos")
+        self.update_selection_summary(0, 0, "0 B", "0 archivos")
 
     def _on_search_changed(self):
         """Debounce en busqueda"""
@@ -153,15 +154,20 @@ class FilterBar(QWidget):
     def _emit_filter(self):
         search = self.search_input.text().strip()
         category = self.category_filter.currentText()
-        cat_filter = "" if category == "Todas las categorias" else category
+        cat_filter = "" if category == "Todas las categorías" else category
         self.filter_changed.emit(search, cat_filter)
 
     def clear_filters(self):
         self.search_input.clear()
         self.category_filter.setCurrentIndex(0)
 
+    def has_active_filter(self) -> bool:
+        return bool(self.search_input.text().strip()) or self.category_filter.currentIndex() > 0
+
     def update_count(self, count):
-        self.count_label.setText(f"{count} resultados")
+        """Visibles con el filtro; sin filtro el resumen de selección ya lo dice."""
+        self.count_label.setText(f"{count} {'visible' if count == 1 else 'visibles'}")
+        self.count_label.setVisible(self.has_active_filter())
 
     def embed_selection_bar(self):
         """Activa los controles compactos de selección dentro de la barra."""
@@ -171,11 +177,12 @@ class FilterBar(QWidget):
             self.deselect_all_btn,
             self.selection_separator,
             self.selection_count_label,
-            self.total_size_label,
-            self.total_files_label,
             self.controls_separator,
         ):
             widget.setVisible(True)
+        # Tamaño y archivos van en el resumen único de selección
+        self.total_size_label.setVisible(False)
+        self.total_files_label.setVisible(False)
 
     def update_selection_summary(
         self,
@@ -184,18 +191,20 @@ class FilterBar(QWidget):
         size_text: str,
         files_text: str,
     ):
-        """Actualiza el resumen compacto de selección."""
-        self.selection_count_label.setText(
-            f"Elementos: {selected_count}/{total_count} seleccionados"
-        )
+        """Un único resumen: «3 de 10 seleccionados · 1,2 GB · 200 archivos»."""
         self.total_size_label.setText(size_text)
         self.total_files_label.setText(files_text)
+        if not selected_count:
+            text = f"Ningún elemento seleccionado de {total_count}" if total_count else "Ningún elemento seleccionado"
+        else:
+            text = f"{selected_count} de {total_count} seleccionados · {size_text} · {files_text}"
+        self.selection_count_label.setText(text)
 
     def update_categories(self, categories):
         """Actualiza las categorias en el filtro"""
         current = self.category_filter.currentText()
         self.category_filter.clear()
-        self.category_filter.addItem("Todas las categorias")
+        self.category_filter.addItem("Todas las categorías")
         for cat in categories:
             self.category_filter.addItem(cat)
         # Restaurar seleccion si existe

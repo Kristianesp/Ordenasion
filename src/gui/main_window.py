@@ -21,7 +21,6 @@ from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -54,6 +53,9 @@ from src.gui.organize_controller import OrganizeController
 from src.gui.preview_dialog import PreviewDialog
 from src.gui.table_models import VirtualizedMovementsModel
 from src.gui.task_center import TaskCenterDialog
+from qfluentwidgets import ComboBox, FluentIcon
+
+from src.gui.v2.components import EmptyState
 from src.gui.v2.theme import (
     apply_control_sizes,
     apply_fluent_theme,
@@ -133,6 +135,7 @@ class FileOrganizerGUI(QMainWindow):
         if active_profile:
             self.profile_combo.setCurrentText(active_profile.name)
         self.refresh_saved_paths()
+        self.update_selection_count()
         # Última red de seguridad: nunca destruir un QThread en marcha al salir
         app = QApplication.instance()
         if app is not None:
@@ -331,10 +334,11 @@ class FileOrganizerGUI(QMainWindow):
         recent_row.setSpacing(8)
         recent_label = QLabel("Recientes y favoritas:")
         recent_row.addWidget(recent_label)
-        self.path_memory_combo = QComboBox()
+        self.path_memory_combo = ComboBox()
         self.path_memory_combo.setAccessibleName("Rutas recientes y favoritas")
+        self.path_memory_combo.setPlaceholderText("Sin rutas guardadas")
         self.path_memory_combo.setMinimumWidth(220)
-        self.path_memory_combo.textActivated.connect(lambda _text: self.use_selected_saved_path())
+        self.path_memory_combo.currentIndexChanged.connect(lambda _index: self.use_selected_saved_path())
         recent_label.setBuddy(self.path_memory_combo)
         recent_row.addWidget(self.path_memory_combo, 1)
         source_layout.addLayout(recent_row)
@@ -381,8 +385,9 @@ class FileOrganizerGUI(QMainWindow):
         profile_row.setSpacing(8)
         profile_label = QLabel("Perfil:")
         profile_row.addWidget(profile_label)
-        self.profile_combo = QComboBox()
+        self.profile_combo = ComboBox()
         self.profile_combo.setAccessibleName("Perfil de organización")
+        self.profile_combo.setPlaceholderText("Sin perfiles")
         self.profile_combo.setMinimumWidth(180)
         self.profile_combo.addItems(self.profile_manager.get_profile_names())
         profile_label.setBuddy(self.profile_combo)
@@ -447,6 +452,12 @@ class FileOrganizerGUI(QMainWindow):
         header.setSectionsClickable(True)
         header.sectionClicked.connect(self.on_header_clicked)
         ol.addWidget(self.movements_table, 1)
+        self.results_empty_state = EmptyState(
+            FluentIcon.FOLDER, "Elige una carpeta y pulsa Analizar para ver qué se puede organizar.",
+            "Elegir carpeta", primary=False)
+        self.results_empty_state.setMinimumHeight(220)
+        self.results_empty_state.action_requested.connect(self.browse_folder)
+        ol.addWidget(self.results_empty_state, 1)
         self.movements_model.dataChanged.connect(self.on_model_data_changed)
         self.movements_table.doubleClicked.connect(self.on_table_double_clicked)
 
@@ -765,7 +776,6 @@ class FileOrganizerGUI(QMainWindow):
             if not (self.movements_model.get_row_data(row) or {}).get("is_child", False)
         )
         selected_count = len(selected_rows)
-        self.selection_count_label.setText(f"{selected_count} de {total_count} seleccionados")
         path = self.folder_input.text().strip()
         matches_analysis = (bool(path) and os.path.isdir(path)
                             and os.path.normcase(os.path.realpath(path)) == self._analysis_result_path)
@@ -773,7 +783,30 @@ class FileOrganizerGUI(QMainWindow):
         self.organize_btn.setEnabled(enabled)
         self.preview_btn.setEnabled(enabled)
         self.update_selected_statistics()
+        self.filter_bar.update_selection_summary(
+            selected_count, total_count, self.total_size_label.text(), self.total_files_label.text())
         self.filter_bar.update_count(self.movements_model.get_visible_count())
+        self._update_results_empty_state(total_count)
+
+    def _update_results_empty_state(self, total_count: int):
+        """Tabla o estado vacío: nunca una tabla vacía sin explicación."""
+        # Con filtro activo la tabla puede quedar vacía: eso no es "sin resultados"
+        has_rows = total_count > 0 or bool(self.folder_movements or self.file_movements)
+        self.movements_table.setVisible(has_rows)
+        self.filter_bar.setVisible(has_rows)
+        self.results_empty_state.setVisible(not has_rows)
+        self.stats_label.setVisible(has_rows)
+        if has_rows:
+            return
+        if self.controller.current_analysis_task_id:
+            self.results_empty_state.set_text("Analizando la carpeta…")
+            self.results_empty_state.set_action("")
+        elif self._analysis_result_path:
+            self.results_empty_state.set_text("No hay nada que organizar en esta carpeta.")
+            self.results_empty_state.set_action("Elegir otra carpeta")
+        else:
+            self.results_empty_state.set_text("Elige una carpeta y pulsa Analizar para ver qué se puede organizar.")
+            self.results_empty_state.set_action("Elegir carpeta")
 
     def update_selected_statistics(self):
         """Tamaño y número de archivos de los elementos seleccionados."""
@@ -1118,17 +1151,14 @@ class FileOrganizerGUI(QMainWindow):
         self.path_memory_combo.blockSignals(True)
         self.path_memory_combo.clear()
         for path in self.app_config.get_favorite_paths():
-            self.path_memory_combo.addItem(f"★ {path}", path)
-            self.path_memory_combo.setItemData(self.path_memory_combo.count() - 1, path, Qt.ItemDataRole.ToolTipRole)
+            self.path_memory_combo.addItem(f"★ {path}", userData=path)
         for path in self.app_config.get_recent_paths():
             if self.path_memory_combo.findData(path) == -1:
-                self.path_memory_combo.addItem(path, path)
-                self.path_memory_combo.setItemData(self.path_memory_combo.count() - 1, path, Qt.ItemDataRole.ToolTipRole)
-        index = self.path_memory_combo.findData(current)
-        if index >= 0:
-            self.path_memory_combo.setCurrentIndex(index)
-        elif self.path_memory_combo.count() > 0:
-            self.path_memory_combo.setCurrentIndex(0)
+                self.path_memory_combo.addItem(path, userData=path)
+        index = self.path_memory_combo.findData(current) if current else -1
+        # Sin elegir nada por defecto: elegir una ruta la carga en el campo
+        self.path_memory_combo.setCurrentIndex(index)
+        self.path_memory_combo.setToolTip(current or "Rutas favoritas (★) y recientes")
         self.path_memory_combo.setEnabled(self.path_memory_combo.count() > 0)
         self.path_memory_combo.blockSignals(False)
         self.update_favorite_button_state()
@@ -1137,6 +1167,7 @@ class FileOrganizerGUI(QMainWindow):
         """Carga una ruta guardada en el campo principal."""
         path = self.path_memory_combo.currentData()
         if path:
+            self.path_memory_combo.setToolTip(path)
             self.folder_input.setText(path)
 
     def add_current_path_to_favorites(self):

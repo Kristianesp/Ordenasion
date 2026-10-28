@@ -238,7 +238,7 @@ class MusicDuplicatesView(QWidget):
         bind_path_tooltip(self.path_input)
         row.addWidget(self.path_input, 1)
 
-        self.browse_btn = QPushButton("📂 Examinar…")
+        self.browse_btn = QPushButton("Examinar…")
         self.browse_btn.setToolTip("Elegir la carpeta de música que se analiza")
         self.browse_btn.clicked.connect(self._browse)
         row.addWidget(self.browse_btn)
@@ -301,7 +301,7 @@ class MusicDuplicatesView(QWidget):
         toast_layout = QHBoxLayout(self.music_toast_frame)
         toast_layout.setContentsMargins(18, 12, 18, 12)
         toast_layout.setSpacing(10)
-        self.music_toast_icon = QLabel("🤖")
+        self.music_toast_icon = QLabel("")
         self.music_toast_icon.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
@@ -755,13 +755,13 @@ class MusicDuplicatesView(QWidget):
         worker = self._scan_worker
         if worker is not None and worker.isRunning():
             worker.stop()
-            self.scan_status_label.setText("⏹ Cancelando análisis musical…")
+            self.scan_status_label.setText("Cancelando análisis musical…")
 
     def cancel_lookup(self):
         worker = self._lookup_worker
         if worker is not None and worker.isRunning():
             worker.stop()
-            self.lookup_status_label.setText("⏹ Cancelando búsqueda online…")
+            self.lookup_status_label.setText("Cancelando búsqueda online…")
 
     def delete_selected_duplicates(self):
         selected_paths = self._selected_duplicate_paths()

@@ -99,7 +99,7 @@ class TaskCenterDialog(QDialog):
     def __init__(self, parent=None, registry: BackgroundTaskRegistry = task_registry):
         super().__init__(parent)
         self.registry = registry
-        self.setWindowTitle("🧵 Centro de tareas")
+        self.setWindowTitle("Centro de tareas")
         self.resize(640, 420)
         self._build_ui()
         self.registry.tasks_updated.connect(self.refresh)
@@ -120,7 +120,7 @@ class TaskCenterDialog(QDialog):
         layout.addLayout(body, 1)
 
         actions = QHBoxLayout()
-        self.cancel_btn = QPushButton("⛔ Cancelar tarea")
+        self.cancel_btn = QPushButton("Cancelar tarea")
         self.cancel_btn.clicked.connect(self.cancel_selected_task)
         actions.addWidget(self.cancel_btn)
         actions.addStretch()

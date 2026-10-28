@@ -165,5 +165,11 @@ def refresh_library(view: Any) -> None:
         count_label.setText(
             f"{shown} de {total} pistas" if shown != total else f"{total} pistas"
         )
+    empty_state = getattr(view, "library_empty_state", None)
+    if empty_state is not None:
+        # Biblioteca sin pistas: estado vacío con acción en lugar de tabla vacía
+        no_tracks = not tracks
+        empty_state.setVisible(no_tracks)
+        view.library_splitter.setVisible(not no_tracks)
     view._restore_column_widths()
     view._update_library_detail_panel()

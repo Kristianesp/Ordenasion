@@ -215,7 +215,7 @@ class DuplicatesDashboard(DuplicatesColumnsMixin, DuplicatesPreviewMixin, Duplic
         main_layout.setSpacing(6)
         main_layout.setContentsMargins(10, 10, 10, 10)
 
-        self.tab_header = TabHeaderWidget("🔍 Detector de duplicados")
+        self.tab_header = TabHeaderWidget("Detector de duplicados")
         main_layout.addWidget(self.tab_header)
 
         controls_frame = QFrame()
@@ -240,7 +240,7 @@ class DuplicatesDashboard(DuplicatesColumnsMixin, DuplicatesPreviewMixin, Duplic
         )
         controls_layout.addWidget(self.method_combo, 0, 1)
 
-        self.select_folder_btn = QPushButton("📂 Elegir carpeta…")
+        self.select_folder_btn = QPushButton("Elegir carpeta…")
         self.select_folder_btn.setMinimumWidth(140)
         self.select_folder_btn.setToolTip("Selecciona la carpeta o disco donde buscar duplicados")
         controls_layout.addWidget(self.select_folder_btn, 0, 2)
@@ -356,16 +356,16 @@ class DuplicatesDashboard(DuplicatesColumnsMixin, DuplicatesPreviewMixin, Duplic
         self.more_actions_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         more_menu = QMenu(self)
         apply_menu_surface(more_menu)
-        self.hardlink_action = more_menu.addAction("🔗 Sustituir copias por hardlinks")
-        self.export_plan_action = more_menu.addAction("📄 Exportar plan de borrado (CSV)")
-        self.export_action = more_menu.addAction("💾 Exportar resultados")
+        self.hardlink_action = more_menu.addAction("Sustituir copias por hardlinks")
+        self.export_plan_action = more_menu.addAction("Exportar plan de borrado (CSV)")
+        self.export_action = more_menu.addAction("Exportar resultados")
         more_menu.addSeparator()
-        self.ignore_group_action = more_menu.addAction("🙈 Ignorar grupo")
-        self.keep_selected_action = more_menu.addAction("🟢 Conservar")
+        self.ignore_group_action = more_menu.addAction("Ignorar grupo")
+        self.keep_selected_action = more_menu.addAction("Conservar")
         self.build_keep_rules_menu(more_menu)
         more_menu.addSeparator()
-        self.reset_columns_action = more_menu.addAction("📏 Restablecer columnas")
-        self.task_center_action = more_menu.addAction("🧵 Tareas")
+        self.reset_columns_action = more_menu.addAction("Restablecer columnas")
+        self.task_center_action = more_menu.addAction("Tareas")
         self.more_actions_btn.setMenu(more_menu)
         actions_layout.addWidget(self.more_actions_btn)
         main_layout.addWidget(self.actions_frame)
@@ -496,14 +496,14 @@ class DuplicatesDashboard(DuplicatesColumnsMixin, DuplicatesPreviewMixin, Duplic
         if has_rows:
             return
         if scanning:
-            text = "🔎 Analizando… los resultados aparecerán aquí."
+            text = "Analizando… los resultados aparecerán aquí."
         elif not self.current_folder:
-            text = ("📂 Elige una carpeta con «Elegir carpeta…» y pulsa «Analizar».\n\n"
+            text = ("Elige una carpeta con «Elegir carpeta…» y pulsa «Analizar».\n\n"
                     "El modo Híbrido confirma por contenido antes de mostrar un grupo.")
         elif self.duplicates_data:
             text = "Ningún resultado pasa los filtros actuales (tamaño mínimo, extensión o texto)."
         elif self._scan_done:
-            text = "✅ No se encontraron duplicados en la carpeta analizada."
+            text = "No se encontraron duplicados en la carpeta analizada."
         else:
             text = "Pulsa «Analizar» para buscar duplicados en la carpeta elegida."
         self.empty_state_label.setText(text)
@@ -565,11 +565,11 @@ class DuplicatesDashboard(DuplicatesColumnsMixin, DuplicatesPreviewMixin, Duplic
         msg_box.setWindowTitle("Seleccionar ámbito de búsqueda")
         msg_box.setText("¿Qué quieres analizar?")
         msg_box.setInformativeText(
-            "📂 CARPETA: analiza solo una carpeta (recomendado)\n"
-            "💿 DISCO: analiza toda una unidad (puede ser muy lento)")
+            "Carpeta: analiza solo una carpeta (recomendado)\n"
+            "Disco: analiza toda una unidad (puede ser muy lento)")
         msg_box.setIcon(QMessageBox.Icon.Question)
-        carpeta_btn = msg_box.addButton("📂 Carpeta", QMessageBox.ButtonRole.YesRole)
-        disco_btn = msg_box.addButton("💿 Disco completo", QMessageBox.ButtonRole.NoRole)
+        carpeta_btn = msg_box.addButton("Carpeta", QMessageBox.ButtonRole.YesRole)
+        disco_btn = msg_box.addButton("Disco completo", QMessageBox.ButtonRole.NoRole)
         cancel_btn = msg_box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
         msg_box.setDefaultButton(carpeta_btn)
         msg_box.exec()

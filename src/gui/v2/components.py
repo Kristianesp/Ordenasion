@@ -234,6 +234,7 @@ class EmptyState(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 24, 16, 24)
         layout.setSpacing(10)
+        layout.addStretch(1)
         self.icon_widget = IconWidget(icon)
         self.icon_widget.setFixedSize(40, 40)
         layout.addWidget(self.icon_widget, alignment=Qt.AlignmentFlag.AlignHCenter)
@@ -249,6 +250,7 @@ class EmptyState(QWidget):
         self.action_button.setVisible(bool(action_text))
         self.action_button.clicked.connect(self.action_requested.emit)
         layout.addWidget(self.action_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addStretch(1)
 
     def set_text(self, text: str) -> None:
         self.text_label.setText(text)

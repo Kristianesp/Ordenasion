@@ -81,23 +81,23 @@ class ConfigDialog(QDialog):
 
     def init_ui(self):
         """Inicializa la interfaz del diálogo"""
-        self.setWindowTitle("⚙️ Configuración de Categorías")
+        self.setWindowTitle("Configuración de categorías")
         self.setGeometry(280, 160, 980, 700)
         self.setModal(True)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        self.title_label = QLabel("⚙️ Configuración de Categorías y Extensiones")
+        self.title_label = QLabel("Configuración de categorías y extensiones")
         self.title_label.setToolTip(
-            "⚙️ Panel principal para configurar categorías, extensiones y personalizar la interfaz"
+            "Panel principal para configurar categorías, extensiones y personalizar la interfaz"
         )
         self.title_label.setObjectName("config_title_label")
         layout.addWidget(self.title_label)
 
         self.stats_label = QLabel()
         self.stats_label.setToolTip(
-            "📊 Resumen de categorías y extensiones configuradas en el sistema"
+            "Resumen de categorías y extensiones configuradas en el sistema"
         )
         self.stats_label.setObjectName("config_stats_label")
         layout.addWidget(self.stats_label)
@@ -120,13 +120,13 @@ class ConfigDialog(QDialog):
         exclusions_layout_box.setContentsMargins(0, 0, 0, 0)
         exclusions_layout_box.setSpacing(10)
 
-        interface_group = QGroupBox("🎨 Configuración de Interfaz")
+        interface_group = QGroupBox("Interfaz")
         interface_group.setToolTip(
             "Personaliza el tamaño de fuente de la aplicación"
         )
         interface_layout = QGridLayout(interface_group)
 
-        font_size_label = QLabel("📝 Tamaño de fuente:")
+        font_size_label = QLabel("Tamaño de fuente:")
         interface_layout.addWidget(font_size_label, 0, 0)
         self.font_size_combo = QComboBox()
         self.font_size_combo.addItems(
@@ -142,18 +142,18 @@ class ConfigDialog(QDialog):
         self.font_size_combo.currentTextChanged.connect(self.on_font_size_changed)
         interface_layout.addWidget(self.font_size_combo, 0, 1)
 
-        self.apply_interface_btn = QPushButton("🎨 Aplicar Cambios")
+        self.apply_interface_btn = QPushButton("Aplicar cambios")
         self.apply_interface_btn.clicked.connect(self.apply_interface_changes)
         interface_layout.addWidget(self.apply_interface_btn, 1, 0, 1, 2)
         general_layout.addWidget(interface_group)
 
-        audio_group = QGroupBox("🎵 Biblioteca musical")
+        audio_group = QGroupBox("Biblioteca musical")
         audio_group.setToolTip(
-            "🎵 Configura el comportamiento musical y las claves opcionales de metadatos online"
+            "Configura el comportamiento musical y las claves opcionales de metadatos online"
         )
         audio_layout = QGridLayout(audio_group)
 
-        self.audio_enabled_checkbox = QCheckBox("Habilitar funciones de musica")
+        self.audio_enabled_checkbox = QCheckBox("Habilitar funciones de música")
         self.audio_enabled_checkbox.setChecked(
             self.app_config.get("audio.enabled", True)
         )
@@ -161,21 +161,21 @@ class ConfigDialog(QDialog):
 
         audio_layout.addWidget(QLabel("Rutas biblioteca:"), 1, 0)
         self.audio_roots_input = QPlainTextEdit()
-        self.audio_roots_input.setPlaceholderText("Una ruta por linea")
+        self.audio_roots_input.setPlaceholderText("Una ruta por línea")
         self.audio_roots_input.setFixedHeight(88)
         self.audio_roots_input.setPlainText(
             "\n".join(self.app_config.get_audio_library_roots())
         )
         audio_layout.addWidget(self.audio_roots_input, 1, 1)
 
-        audio_layout.addWidget(QLabel("Template organizacion:"), 2, 0)
+        audio_layout.addWidget(QLabel("Plantilla de organización:"), 2, 0)
         self.audio_template_input = QLineEdit()
         self.audio_template_input.setText(
             self.app_config.get_audio_organization_template()
         )
         audio_layout.addWidget(self.audio_template_input, 2, 1)
 
-        audio_layout.addWidget(QLabel("Politica duplicados:"), 3, 0)
+        audio_layout.addWidget(QLabel("Política de duplicados:"), 3, 0)
         self.audio_policy_combo = QComboBox()
         self.audio_policy_combo.addItems(["review", "quarantine", "prefer_lossless"])
         self.audio_policy_combo.setCurrentText(
@@ -198,7 +198,7 @@ class ConfigDialog(QDialog):
         self.acoustid_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.acoustid_key_input.setPlaceholderText("Client key de AcoustID para lookup")
         self.acoustid_key_input.setToolTip(
-            "No uses la clave de tu pagina de perfil. Lookup usa el parametro client= de una aplicacion registrada."
+            "No uses la clave de tu página de perfil. La búsqueda usa el parámetro client= de una aplicación registrada."
         )
         self.acoustid_key_input.setText(self.app_config.get_acoustid_api_key())
         self.acoustid_key_input.textChanged.connect(self._persist_audio_settings_live)
@@ -220,9 +220,9 @@ class ConfigDialog(QDialog):
 
         catalog_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        categories_group = QGroupBox("📁 Categorías Existentes")
+        categories_group = QGroupBox("Categorías")
         categories_group.setToolTip(
-            "📁 Gestiona las categorías del sistema y crea nuevas personalizadas"
+            "Gestiona las categorías del sistema y crea nuevas personalizadas"
         )
         categories_layout = QVBoxLayout(categories_group)
         self.categories_list = QListWidget()
@@ -231,24 +231,24 @@ class ConfigDialog(QDialog):
         categories_layout.addWidget(self.categories_list)
 
         cat_buttons_layout = QHBoxLayout()
-        self.add_cat_btn = QPushButton("➕ Añadir")
+        self.add_cat_btn = QPushButton("Añadir")
         self.add_cat_btn.clicked.connect(self.add_category)
         self.add_cat_btn.setProperty("styleClass", "success")
         cat_buttons_layout.addWidget(self.add_cat_btn)
 
-        self.remove_cat_btn = QPushButton("🗑️ Eliminar")
+        self.remove_cat_btn = QPushButton("Eliminar")
         self.remove_cat_btn.clicked.connect(self.remove_category)
         self.remove_cat_btn.setProperty("styleClass", "danger")
         cat_buttons_layout.addWidget(self.remove_cat_btn)
 
-        self.rules_btn = QPushButton("📋 Reglas")
+        self.rules_btn = QPushButton("Reglas")
         self.rules_btn.clicked.connect(self.open_rules_panel)
         cat_buttons_layout.addWidget(self.rules_btn)
         categories_layout.addLayout(cat_buttons_layout)
 
-        extensions_group = QGroupBox("📄 Extensiones de la Categoría")
+        extensions_group = QGroupBox("Extensiones de la categoría")
         extensions_group.setToolTip(
-            "📄 Gestiona las extensiones de archivo de la categoría seleccionada"
+            "Gestiona las extensiones de archivo de la categoría seleccionada"
         )
         extensions_layout = QVBoxLayout(extensions_group)
         self.extensions_list = QListWidget()
@@ -256,11 +256,11 @@ class ConfigDialog(QDialog):
         extensions_layout.addWidget(self.extensions_list)
 
         ext_buttons_layout = QHBoxLayout()
-        self.add_ext_btn = QPushButton("➕ Añadir")
+        self.add_ext_btn = QPushButton("Añadir")
         self.add_ext_btn.clicked.connect(self.add_extension)
         ext_buttons_layout.addWidget(self.add_ext_btn)
 
-        self.remove_ext_btn = QPushButton("🗑️ Eliminar")
+        self.remove_ext_btn = QPushButton("Eliminar")
         self.remove_ext_btn.clicked.connect(self.remove_extension)
         ext_buttons_layout.addWidget(self.remove_ext_btn)
         extensions_layout.addLayout(ext_buttons_layout)
@@ -272,18 +272,18 @@ class ConfigDialog(QDialog):
         catalog_layout.addWidget(catalog_splitter)
 
         cat_actions_layout = QHBoxLayout()
-        self.export_btn = QPushButton("📤 Exportar")
+        self.export_btn = QPushButton("Exportar")
         self.export_btn.clicked.connect(self.export_to_txt)
         cat_actions_layout.addWidget(self.export_btn)
 
-        self.reset_btn = QPushButton("🔄 Restaurar")
+        self.reset_btn = QPushButton("Restaurar")
         self.reset_btn.clicked.connect(self.reset_to_default)
         cat_actions_layout.addWidget(self.reset_btn)
         catalog_layout.addLayout(cat_actions_layout)
 
-        exclusions_group = QGroupBox("🚫 Exclusiones")
+        exclusions_group = QGroupBox("Exclusiones")
         exclusions_group.setToolTip(
-            "🚫 Gestiona extensiones ignoradas, rutas protegidas y carpetas excluidas"
+            "Gestiona extensiones ignoradas, rutas protegidas y carpetas excluidas"
         )
         exclusions_grid = QGridLayout(exclusions_group)
 
@@ -291,7 +291,7 @@ class ConfigDialog(QDialog):
         self.ignored_extension_input = QLineEdit()
         self.ignored_extension_input.setPlaceholderText(".tmp")
         exclusions_grid.addWidget(self.ignored_extension_input, 0, 1)
-        self.add_ignored_extension_btn = QPushButton("➕ Añadir")
+        self.add_ignored_extension_btn = QPushButton("Añadir")
         self.add_ignored_extension_btn.clicked.connect(self.add_ignored_extension)
         self.add_ignored_extension_btn.setText("+")
         self.add_ignored_extension_btn.setToolTip("Añadir extensión ignorada")
@@ -300,7 +300,7 @@ class ConfigDialog(QDialog):
         self.ignored_extensions_list = QListWidget()
         self.ignored_extensions_list.setMinimumHeight(64)
         exclusions_grid.addWidget(self.ignored_extensions_list, 1, 0, 1, 2)
-        self.remove_ignored_extension_btn = QPushButton("🗑️ Eliminar")
+        self.remove_ignored_extension_btn = QPushButton("Eliminar")
         self.remove_ignored_extension_btn.clicked.connect(
             self.remove_selected_ignored_extension
         )
@@ -316,14 +316,14 @@ class ConfigDialog(QDialog):
         self.protected_path_input.setPlaceholderText("/home/usuario/Documentos")
         self.protected_path_input.returnPressed.connect(self.add_protected_path)
         exclusions_grid.addWidget(self.protected_path_input, 2, 1)
-        self.browse_protected_path_btn = QPushButton("📂 Examinar")
+        self.browse_protected_path_btn = QPushButton("Examinar")
         self.browse_protected_path_btn.clicked.connect(self.browse_protected_path)
         self.browse_protected_path_btn.setProperty("styleClass", "ghost")
         exclusions_grid.addWidget(self.browse_protected_path_btn, 2, 2)
         self.protected_paths_list = QListWidget()
         self.protected_paths_list.setMinimumHeight(64)
         exclusions_grid.addWidget(self.protected_paths_list, 3, 0, 1, 2)
-        self.remove_protected_path_btn = QPushButton("🗑️ Eliminar")
+        self.remove_protected_path_btn = QPushButton("Eliminar")
         self.remove_protected_path_btn.clicked.connect(
             self.remove_selected_protected_path
         )
@@ -339,14 +339,14 @@ class ConfigDialog(QDialog):
         self.ignored_path_input.setPlaceholderText("/home/usuario/Descargas/tmp")
         self.ignored_path_input.returnPressed.connect(self.add_ignored_path)
         exclusions_grid.addWidget(self.ignored_path_input, 4, 1)
-        self.browse_ignored_path_btn = QPushButton("📂 Examinar")
+        self.browse_ignored_path_btn = QPushButton("Examinar")
         self.browse_ignored_path_btn.clicked.connect(self.browse_ignored_path)
         self.browse_ignored_path_btn.setProperty("styleClass", "ghost")
         exclusions_grid.addWidget(self.browse_ignored_path_btn, 4, 2)
         self.ignored_paths_list = QListWidget()
         self.ignored_paths_list.setMinimumHeight(64)
         exclusions_grid.addWidget(self.ignored_paths_list, 5, 0, 1, 2)
-        self.remove_ignored_path_btn = QPushButton("🗑️ Eliminar")
+        self.remove_ignored_path_btn = QPushButton("Eliminar")
         self.remove_ignored_path_btn.clicked.connect(self.remove_selected_ignored_path)
         self.remove_ignored_path_btn.setText("-")
         self.remove_ignored_path_btn.setToolTip(
@@ -367,9 +367,9 @@ class ConfigDialog(QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         ok_button = button_box.button(QDialogButtonBox.StandardButton.Ok)
-        ok_button.setText("💾 Guardar y Cerrar")
+        ok_button.setText("Guardar y cerrar")
         cancel_button = button_box.button(QDialogButtonBox.StandardButton.Cancel)
-        cancel_button.setText("❌ Cancelar")
+        cancel_button.setText("Cancelar")
         layout.addWidget(button_box)
 
         self.remove_cat_btn.setEnabled(False)
@@ -427,7 +427,7 @@ class ConfigDialog(QDialog):
     def add_category(self):
         """Añade una nueva categoría"""
         name, ok = QInputDialog.getText(
-            self, "➕ Nueva Categoría", "Nombre de la nueva categoría:"
+            self, "Nueva categoría", "Nombre de la nueva categoría:"
         )
 
         if ok and name.strip():
@@ -493,7 +493,7 @@ class ConfigDialog(QDialog):
         category_name = current_item.text()
         extension, ok = QInputDialog.getText(
             self,
-            "➕ Nueva Extensión",
+            "Nueva extensión",
             f"Extensión para la categoría '{category_name}':\n\n"
             "Formato: .ext (ejemplo: .pdf)",
         )
@@ -569,7 +569,7 @@ class ConfigDialog(QDialog):
         """Exporta las categorías a un archivo de texto"""
         filepath, _ = QFileDialog.getSaveFileName(
             self,
-            "📤 Exportar Categorías",
+            "Exportar categorías",
             "categorias_organizador.txt",
             "Archivos de texto (*.txt)",
         )
@@ -610,7 +610,7 @@ class ConfigDialog(QDialog):
         total_extensions = sum(stats.values())
 
         stats_text = (
-            f"📊 {total_categories} categorías • 📄 {total_extensions} extensiones"
+            f"{total_categories} categorías · {total_extensions} extensiones"
         )
         self.stats_label.setText(stats_text)
 
@@ -683,7 +683,7 @@ class ConfigDialog(QDialog):
 
     def on_font_size_changed(self, value):
         """Maneja el cambio en el tamaño de fuente"""
-        # El cambio se aplicará cuando se presione "Aplicar Cambios"
+        # El cambio se aplicará cuando se presione "Aplicar cambios"
         pass
 
     def apply_interface_changes(self):
@@ -713,10 +713,10 @@ class ConfigDialog(QDialog):
 
             # Crear el mensaje con el tema aplicado
             msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("✅ Cambios Aplicados INMEDIATAMENTE")
+            msg_box.setWindowTitle("Cambios aplicados")
             msg_box.setText(
-                f"📝 Tamaño: {self.get_font_size_description(font_size)}\n\n"
-                f"Los cambios se han aplicado INMEDIATAMENTE a toda la aplicación."
+                f"Tamaño: {self.get_font_size_description(font_size)}\n\n"
+                f"Los cambios se han aplicado a toda la aplicación."
             )
             msg_box.setIcon(QMessageBox.Icon.Information)
 
@@ -727,7 +727,7 @@ class ConfigDialog(QDialog):
 
         except Exception as e:
             QMessageBox.critical(
-                self, "Error", f"❌ Error al aplicar cambios de interfaz:\n{str(e)}"
+                self, "Error", f"Error al aplicar cambios de interfaz:\n{str(e)}"
             )
 
     def get_font_size_from_combo(self) -> int:

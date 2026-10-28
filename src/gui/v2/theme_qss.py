@@ -570,6 +570,17 @@ def _build_legacy_surface_stylesheet(config: AppConfig) -> str:
             color: {tokens.text_primary};
             font-size: {base_font_size}px;
         }}
+        QWidget#legacySurface QLabel#organizeSectionTitle,
+        QWidget#legacySurface QLabel#musicSectionTitle {{
+            background: transparent;
+            color: {tokens.text_primary};
+            font-size: {card_title_size}px;
+            font-weight: 600;
+        }}
+        QWidget#legacySurface QLabel#organizeHint {{
+            background: transparent;
+            color: {tokens.text_secondary};
+        }}
         QWidget#legacySurface QGroupBox#analysis_group {{
             background: {tokens.surface};
             background-color: {tokens.surface};
