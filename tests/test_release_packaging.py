@@ -18,8 +18,8 @@ ROOT = Path(main_fluent.__file__).resolve().parent
 
 
 def test_release_version_and_spec_use_fluent_assets_without_private_data():
-    assert APP_VERSION == "4.0.0" and VERSION_INFO == (4, 0, 0, 0)
-    assert EXECUTABLE_NAME == "Ordenasion_v4.0.0"
+    assert APP_VERSION == "4.0.1" and VERSION_INFO == (4, 0, 1, 0)
+    assert EXECUTABLE_NAME == "Ordenasion_v4.0.1"
     calls = {}
 
     def analysis(*args, **kwargs):
@@ -34,9 +34,13 @@ def test_release_version_and_spec_use_fluent_assets_without_private_data():
         calls["exe"] = kwargs
         calls["exe_args"] = args
 
+    def splash(image, **kwargs):
+        calls["splash"] = image, kwargs
+        return SimpleNamespace(binaries=[("tcl86t.dll", "tcl/tcl86t.dll", "BINARY")])
+
     spec = (ROOT / "OrganizadorAlpha_OPTIMIZED.spec").read_text(encoding="utf-8")
     exec(compile(spec, "release.spec", "exec"), {"SPECPATH": str(ROOT), "Analysis": analysis,
-         "PYZ": lambda *_: None, "EXE": exe})
+         "PYZ": lambda *_: None, "EXE": exe, "Splash": splash})
     args, options = calls["analysis"]
     assert args[0] == [str(ROOT / "main_fluent.py")]
     assert "PyQt6.QtMultimedia" in options["hiddenimports"]
@@ -50,14 +54,39 @@ def test_release_version_and_spec_use_fluent_assets_without_private_data():
             assert (ROOT / relative).with_suffix(".py").is_file() or (ROOT / relative).is_dir(), module
     assert calls["exe"]["name"] == EXECUTABLE_NAME and not calls["exe"]["console"]
     assert "collect_all(" not in spec
-    packaged_binaries = {Path(entry[0]).name.lower() for entry in calls["exe_args"][2]}
+    # Imagen de carga del onefile: existe y se pasa al EXE con sus binarios
+    image, splash_options = calls["splash"]
+    assert Path(image).is_file() and splash_options["always_on_top"]
+    assert calls["exe_args"][3][0][0] == "tcl86t.dll"
+    packaged_binaries = {Path(entry[0]).name.lower() for entry in calls["exe_args"][4]}
     assert not {"ucrtbase.dll", "icuuc.dll", "icudt78.dll"} & packaged_binaries
     assert "qt6core.dll" in packaged_binaries
     included = [Path(source).name for source, _ in options["datas"]]
     assert {"branding", "fonts", "design-tokens.json", "LICENSE"} <= set(included)
     assert not {"app_config.json", "organization_profiles.json", "categories_config.json"} & set(included)
     pe = Path(calls["exe"]["version"]).read_text(encoding="utf-8")
-    assert "filevers=(4, 0, 0, 0)" in pe and "Ordenasion_v4.0.0.exe" in pe
+    assert "filevers=(4, 0, 1, 0)" in pe and "Ordenasion_v4.0.1.exe" in pe
+
+
+def test_onedir_spec_collects_portable_folder(monkeypatch):
+    calls = {}
+
+    def analysis(*args, **kwargs):
+        return SimpleNamespace(pure=(), scripts=(), binaries=list(kwargs["binaries"]), datas=kwargs["datas"])
+
+    def exe(*args, **kwargs):
+        calls["exe"] = args, kwargs
+        return "exe"
+
+    def collect(*args, **kwargs):
+        calls["collect"] = args, kwargs
+
+    monkeypatch.setenv("ORDENASION_ONEDIR", "1")
+    spec = (ROOT / "OrganizadorAlpha_OPTIMIZED.spec").read_text(encoding="utf-8")
+    exec(compile(spec, "release.spec", "exec"), {"SPECPATH": str(ROOT), "Analysis": analysis,
+         "PYZ": lambda *_: None, "EXE": exe, "COLLECT": collect})
+    assert calls["exe"][1]["exclude_binaries"] and not calls["exe"][1]["console"]
+    assert calls["collect"][0][0] == "exe" and calls["collect"][1]["name"] == EXECUTABLE_NAME
 
 
 def test_source_release_smoke_preserves_caller_config_and_exits_cleanly(tmp_path):

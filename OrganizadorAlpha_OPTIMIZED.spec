@@ -1,6 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Build onefile de la interfaz Fluent; nunca incluye preferencias del workspace.
+# Build de la interfaz Fluent; nunca incluye preferencias del workspace.
+# Por defecto: un único .exe (onefile) con imagen de carga mientras se
+# descomprime. Con ORDENASION_ONEDIR=1: carpeta portable, que no descomprime
+# nada al arrancar y abre mucho más rápido.
 from pathlib import Path
+import os
 import sys
 
 project_root = Path(SPECPATH)
@@ -37,10 +41,20 @@ a = Analysis([str(project_root / "main_fluent.py")], pathex=[str(project_root)],
 a.binaries = [entry for entry in a.binaries
               if Path(entry[0]).name.lower() not in {"ucrtbase.dll", "icuuc.dll", "icudt78.dll"}]
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name=EXECUTABLE_NAME,
+exe_options = dict(name=EXECUTABLE_NAME,
     icon=str(project_root / "assets" / "branding" / "ordenasion-icon.ico"),
     version=str(project_root / "packaging" / "windows_version_info.txt"),
     debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
     upx_exclude=[], runtime_tmpdir=None, console=False,
     disable_windowed_traceback=False, argv_emulation=False, target_arch=None,
     codesign_identity=None, entitlements_file=None)
+
+if os.environ.get("ORDENASION_ONEDIR") == "1":
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, **exe_options)
+    coll = COLLECT(exe, a.binaries, a.datas, name=EXECUTABLE_NAME, strip=False, upx=False)
+else:
+    # La imagen aparece al instante, mientras el .exe se descomprime en %TEMP%;
+    # main_fluent la cierra cuando ya se ve el splash de Qt.
+    splash = Splash(str(project_root / "packaging" / "splash.png"), binaries=a.binaries,
+                    datas=a.datas, text_pos=None, always_on_top=True)
+    exe = EXE(pyz, a.scripts, splash, splash.binaries, a.binaries, a.datas, [], **exe_options)

@@ -1,5 +1,19 @@
 # Cambios de Ordenasion
 
+## 4.0.1 — 2026-10-28
+
+1. **El ejecutable vuelve a abrirse siempre:**
+   - La ventana se mostraba con opacidad 0 y sólo se hacía visible tras su primera pintura; si Windows no la notificaba, quedaba invisible. Ahora se muestra igualmente a los 2,5 s.
+   - La lectura de unidades de Inicio ya no bloquea el arranque: va en segundo plano, así que una unidad de red desconectada o un lector lento no congelan la ventana.
+2. **Imagen de carga inmediata:** el `.exe` muestra la pantalla de Ordenasion nada más hacer doble clic, mientras se descomprime.
+3. **Versión portable (`_portable.zip`):** no descomprime nada en cada arranque y abre mucho más rápido.
+4. **Diagnóstico:**
+   - Registro en `%LOCALAPPDATA%\Ordenasion\logs\ordenasion.log`, con cada fase del arranque y su tiempo.
+   - Si la ventana no aparece en 20 s, `arranque-bloqueado.txt` guarda dónde se quedó cada hilo.
+   - Los fallos graves quedan en `fallo-grave.txt`.
+5. **Release verificada en Windows real:** la CI abre los dos formatos como un usuario, con el gestor de discos activo, y falla si la ventana no aparece.
+6. **Rutas en formato de Windows:** favoritas, recientes y rutas protegidas se guardan con `\` y se comparan sin distinguir mayúsculas. Quitar una favorita pegada desde el Explorador ya funciona.
+
 ## 4.0.0 — 2026-10-28
 
 1. **Organizar, ahora Fluent nativo:** la página deja de envolver la ventana

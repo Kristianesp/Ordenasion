@@ -1,6 +1,6 @@
-# Guía de compilación del ejecutable — Ordenasion 4.0.0
+# Guía de compilación del ejecutable — Ordenasion 4.0.1
 
-Esta guía explica cómo se genera `Ordenasion_v4.0.0.exe` y qué hay que vigilar
+Esta guía explica cómo se genera `Ordenasion_v4.0.1.exe` y qué hay que vigilar
 para que el ejecutable siga siendo pequeño, arranque bien y no se lleve datos
 personales. El procedimiento paso a paso de una release (comandos exactos,
 smoke del EXE y publicación) está en
@@ -14,7 +14,7 @@ smoke del EXE y publicación) está en
 |---|---|
 | Punto de entrada | `main_fluent.py` (el único; `main.py` y `main_optimized.py` ya no existen) |
 | Spec de PyInstaller | `OrganizadorAlpha_OPTIMIZED.spec` (la única) |
-| Resultado | Un único archivo `Ordenasion_v4.0.0.exe` (onefile, sin consola) |
+| Resultado | `Ordenasion_v4.0.1.exe` (onefile, sin consola, con imagen de carga) y, con `ORDENASION_ONEDIR=1`, la carpeta portable `Ordenasion_v4.0.1\` |
 | Nombre y versión | Salen de `src/utils/version.py` (`EXECUTABLE_NAME`, `APP_VERSION`) |
 | Metadatos PE | `packaging/windows_version_info.txt` |
 | Herramientas de build | `requirements-build.txt` (PyInstaller y hooks fijados) |
@@ -35,11 +35,16 @@ py -3 -m venv venv
 .\venv\Scripts\python.exe -m pytest -q
 .\venv\Scripts\python.exe main_fluent.py
 
-# Compilar
+# Compilar el .exe único
 .\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm OrganizadorAlpha_OPTIMIZED.spec
+
+# Compilar la carpeta portable (arranca más rápido: no descomprime nada)
+$env:ORDENASION_ONEDIR = "1"
+.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --distpath dist-portable OrganizadorAlpha_OPTIMIZED.spec
+Remove-Item Env:ORDENASION_ONEDIR
 ```
 
-El ejecutable queda en `dist\Ordenasion_v4.0.0.exe`. Para una release usa los
+El ejecutable queda en `dist\Ordenasion_v4.0.1.exe`. Para una release usa los
 directorios propios por versión (`--distpath`/`--workpath`) y el `PATH` acotado
 que se describen en `releases_tags_creacion_exes.md`.
 
@@ -60,6 +65,11 @@ que se describen en `releases_tags_creacion_exes.md`.
   `lazy_gui_modules`.**
 - **Exclusiones:** `matplotlib`, `numpy`, `reportlab`, `schedule`, `torch`,
   WebEngine, Charts y `pytest`.
+- **Imagen de carga (sólo onefile):** `packaging/splash.png` se muestra nada más
+  hacer doble clic, mientras el `.exe` se descomprime en `%TEMP%`; `main_fluent.py`
+  la cierra con `pyi_splash` en cuanto aparece el splash de Qt. Requiere el Tcl/Tk
+  de la instalación de Python (incluido en el instalador de python.org). Se
+  regenera con `python tools/render_boot_splash.py`.
 - **DLL del sistema:** se quitan `ucrtbase.dll` y las ICU que PyInstaller pueda
   encontrar en el `PATH`; Qt usa las de Windows.
 
@@ -85,7 +95,14 @@ archivos que encuentre junto al ejecutable o en el directorio de trabajo
 4. **Cerrar la ventana antes de que Python termine.** `main_fluent.main()` llama a
    `dispose_window()` al salir; sin eso, la limpieza de PyQt podía terminar en un
    fallo de segmentación con la tabla Fluent.
-5. **Subprocesos sin ventana.** Todas las llamadas a `smartctl` usan
+5. **La ventana nunca puede quedarse invisible.** El splash de Qt oculta la
+   ventana (opacidad 0) hasta su primera pintura. En algunos Windows esa pintura
+   no se notifica y la ventana podía quedarse sin aparecer. Desde la 4.0.1 se muestra
+   igualmente a los 2,5 s (`REVEAL_FALLBACK_MS` en `startup_splash.py`).
+6. **Nada lento en el hilo de la interfaz durante el arranque.** Leer unidades
+   (`psutil.disk_usage`) puede bloquearse con una unidad de red caída; se hace en
+   segundo plano.
+7. **Subprocesos sin ventana.** Todas las llamadas a `smartctl` usan
    `CREATE_NO_WINDOW` y UTF-8; en un EXE `--noconsole` cualquier otra cosa hace
    parpadear una consola.
 
@@ -93,9 +110,9 @@ archivos que encuentre junto al ejecutable o en el directorio de trabajo
 
 ## 5. Comprobaciones después de compilar
 
-- [ ] `dist\Ordenasion_v4.0.0.exe` existe; anota tamaño y SHA-256 (no hay un
+- [ ] `dist\Ordenasion_v4.0.1.exe` existe; anota tamaño y SHA-256 (no hay un
       límite fijo, pero un salto grande indica una dependencia nueva).
-- [ ] Propiedades del archivo → Detalles: versión 4.0.0 e icono correctos.
+- [ ] Propiedades del archivo → Detalles: versión 4.0.1 e icono correctos.
 - [ ] El smoke aislado (`ORDENASION_SMOKE=1`) termina con código 0 y el JSON
       dice `status=ok` (comandos en `releases_tags_creacion_exes.md`).
 - [ ] Al abrirlo normalmente: splash, ventana Fluent, todas las páginas abren,
@@ -114,11 +131,15 @@ archivos que encuentre junto al ejecutable o en el directorio de trabajo
 | Ejecutable de cientos de MB | Dependencia pesada nueva o `collect_all()` | Revisar `build\*\warn-*.txt` y la lista de exclusiones |
 | La salud SMART sale como no disponible | Falta `bin\smartctl.exe` o hacen falta permisos | Copiar smartctl en `bin\` (ver `INSTRUCCIONES_SMARTCTL.md`) o usar «Reintentar como administrador» |
 | Fallo al cerrar la app | Ventana destruida después de Python | Mantener la llamada a `dispose_window()` en `main_fluent.py` |
+| No se abre o tarda mucho | Bloqueo durante el arranque | Revisar `%LOCALAPPDATA%\Ordenasion\logs\ordenasion.log` (tiempo de cada fase) y `arranque-bloqueado.txt` (pila de cada hilo a los 20 s) |
 
 ---
 
 ## Historial
 
+- **4.0.1 (2026-10):** imagen de carga del onefile, versión portable (onedir),
+  plan B para mostrar la ventana, lectura de discos fuera del hilo de la interfaz,
+  registro de arranque y arranque real verificado en la CI de Windows.
 - **4.0.0 (2026-10):** spec y guía actualizadas a la página Organizar nativa
   (sin `main_window.py`), páginas bajo demanda, datos de usuario en
   `%LOCALAPPDATA%` y salida ordenada con `dispose_window()`.

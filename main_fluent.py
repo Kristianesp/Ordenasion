@@ -5,6 +5,13 @@ import sys
 import os
 import traceback
 
+if __name__ == "__main__":
+    # Antes de importar Qt: también mide (y vigila) la carga de librerías,
+    # que en el ejecutable onefile es la parte más lenta del arranque.
+    from src.utils import startup_diagnostics
+
+    startup_diagnostics.begin()
+
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from src.gui.v2.startup_splash import (
@@ -41,6 +48,12 @@ def dispose_window(window) -> None:
             sip.delete(widget)
 
 
+def _milestone(name: str) -> None:
+    from src.utils import startup_diagnostics
+
+    startup_diagnostics.milestone(name)
+
+
 def start_window(app):
     mode = startup_theme_mode()
     app.setApplicationName(APP_NAME)
@@ -50,10 +63,16 @@ def start_window(app):
     splash = FluentStartupSplash(mode)
     splash.show()
     app.processEvents()
+    _close_bootloader_splash()
+    _milestone("splash visible")
     window = None
     try:
         window = create_window()
+        _milestone("ventana construida")
         window.setWindowIcon(app.windowIcon())
+        from src.utils import startup_diagnostics
+
+        splash.finished.connect(lambda: startup_diagnostics.finish(splash.revealed_by_fallback))
         splash.prepare_window(window)
         window.show_maximized_safe()
         # Mantener referencia durante el event loop; el splash se cierra al
@@ -64,27 +83,49 @@ def start_window(app):
         splash.close()
         if window is not None:
             window.close()
-        from src.utils.logger import get_logger
+        from src.utils.logger import get_logger, log_directory
         get_logger().error("No se pudo iniciar Ordenasion:\n%s", traceback.format_exc())
         if os.environ.get("ORDENASION_SMOKE") == "1":
             raise
-        QMessageBox.critical(None, "No se pudo iniciar Ordenasion", f"{exc}\n\nCierra este mensaje y vuelve a intentarlo.")
+        QMessageBox.critical(None, "No se pudo iniciar Ordenasion",
+                             f"{exc}\n\nEl detalle está en {log_directory()}.\n"
+                             "Cierra este mensaje y vuelve a intentarlo.")
         return None
+
+
+def _close_bootloader_splash() -> None:
+    """Cierra la imagen que muestra el ejecutable mientras se descomprime."""
+    if "_PYI_SPLASH_IPC" not in os.environ:
+        return  # sin imagen de carga: código fuente o versión portable
+    try:
+        import pyi_splash  # sólo existe en el ejecutable con Splash de PyInstaller
+    except ImportError:
+        return
+    try:
+        pyi_splash.close()
+    except RuntimeError:
+        pass
 
 
 def main() -> int:
     if os.environ.get("ORDENASION_SMOKE") == "1":
         from src.gui.v2.release_smoke import run_smoke
         return run_smoke(start_window, dispose_window)
+    _milestone("librerías cargadas")
     app = QApplication(sys.argv)
+    _milestone("QApplication creada")
     window = start_window(app)
     if window is None:
+        _close_bootloader_splash()
         return 1
     try:
         return app.exec()
     finally:
         window._startup_splash.close()
         dispose_window(window)
+        from src.utils import startup_diagnostics
+
+        startup_diagnostics.shutdown()
 
 
 if __name__ == "__main__":
