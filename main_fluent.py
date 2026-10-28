@@ -111,6 +111,10 @@ def main() -> int:
     if os.environ.get("ORDENASION_SMOKE") == "1":
         from src.gui.v2.release_smoke import run_smoke
         return run_smoke(start_window, dispose_window)
+    if os.environ.get("ORDENASION_E2E") == "1":
+        from src.gui.v2.release_e2e import run
+        app = QApplication(sys.argv)  # la referencia mantiene viva la aplicación
+        return run(start_window, dispose_window)
     _milestone("librerías cargadas")
     app = QApplication(sys.argv)
     _milestone("QApplication creada")
