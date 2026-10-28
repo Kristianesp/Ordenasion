@@ -1,5 +1,34 @@
 # Compilación y release de Ordenasion 4.0.0
 
+## 0. Release automática (recomendada)
+
+El workflow `.github/workflows/release.yml` hace todo el proceso en un runner
+Windows de GitHub Actions:
+1. Instala las dependencias.
+2. Pasa los tests.
+3. Compila con la spec usando un `PATH` acotado.
+4. Ejecuta el smoke aislado sobre el EXE.
+5. Calcula el tamaño y el SHA-256.
+6. Publica el ejecutable como **pre-release**.
+
+Para publicar una versión:
+
+```powershell
+# APP_VERSION en src/utils/version.py y la sección del CHANGELOG ya actualizadas
+git tag v4.0.0
+git push origin v4.0.0
+```
+
+- **Si la etiqueta no coincide con `APP_VERSION`**, el workflow falla sin publicar nada.
+- **Las notas de la release** salen de la sección de esa versión en `CHANGELOG.md` (`tools/release_notes.py`).
+- **En un PR** que toque la spec, los requirements o el propio workflow, se compila y se pasa el smoke, pero no se publica. El EXE queda como artefacto del run durante 30 días.
+
+Cuando la versión esté validada en equipos reales, márcala como definitiva:
+- en GitHub: Releases → editar → desmarcar «Set as a pre-release»;
+- o con `gh release edit v4.0.0 --prerelease=false --latest`.
+
+Las secciones siguientes describen el mismo proceso a mano, en un equipo local.
+
 ## 1. Entorno y paquete
 
 Usa Python 3.12 x64 y el venv del proyecto. Instala las dependencias de aplicación

@@ -1,0 +1,112 @@
+name: Release Windows
+
+# Compila el ejecutable en Windows, lo verifica con el smoke aislado y, sólo
+# al empujar una etiqueta vX.Y.Z, lo publica como pre-release de GitHub.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "OrganizadorAlpha_OPTIMIZED.spec"
+      - "requirements*.txt"
+      - "packaging/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements.txt -r requirements-build.txt pytest
+
+      - name: Tests en Windows
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m pytest -q
+
+      - name: Comprobar que la etiqueta coincide con la versión
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          $version = python -c "from src.utils.version import APP_VERSION; print(APP_VERSION)"
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "La etiqueta ${{ github.ref_name }} no coincide con APP_VERSION $version"
+          }
+
+      - name: Compilar con PyInstaller
+        run: |
+          $python = (Get-Command python).Source
+          $base = & $python -c "import sys; print(sys.base_prefix)"
+          $scripts = Split-Path $python
+          # PATH acotado: no recoger DLL de otras herramientas instaladas en el runner
+          $env:PATH = "$scripts;$base;$env:WINDIR\System32;$env:WINDIR"
+          & $python -m PyInstaller --clean --noconfirm --distpath dist --workpath build OrganizadorAlpha_OPTIMIZED.spec
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller falló" }
+
+      - name: Smoke del ejecutable
+        run: |
+          $name = python -c "from src.utils.version import EXECUTABLE_NAME; print(EXECUTABLE_NAME)"
+          $exe = Resolve-Path "dist/$name.exe"
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          $env:ORDENASION_SMOKE = "1"
+          $env:ORDENASION_SMOKE_REPORT = Join-Path $PWD "smoke/smoke-exe.json"
+          $env:ORDENASION_DATA_DIR = Join-Path $env:RUNNER_TEMP "ordenasion-smoke-data"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $process = Start-Process -FilePath $exe -WindowStyle Hidden -Wait -PassThru
+          Get-Content $env:ORDENASION_SMOKE_REPORT
+          $report = Get-Content $env:ORDENASION_SMOKE_REPORT -Raw | ConvertFrom-Json
+          if ($process.ExitCode -ne 0 -or $report.status -ne "ok") {
+            Get-Content ($env:ORDENASION_SMOKE_REPORT -replace '\.json$', '.log') -ErrorAction SilentlyContinue
+            throw "Smoke fallido (código $($process.ExitCode), estado $($report.status))"
+          }
+
+      - name: Tamaño y SHA-256
+        id: hash
+        run: |
+          $exe = Get-ChildItem dist/*.exe | Select-Object -First 1
+          $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          $mb = [math]::Round($exe.Length / 1MB, 1)
+          "$sha  $($exe.Name)" | Out-File -Encoding ascii "dist/$($exe.Name).sha256"
+          "exe=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "mb=$mb" >> $env:GITHUB_OUTPUT
+          "### $($exe.Name)`n`n- Tamaño: $mb MB`n- SHA-256: ``$sha``" >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ordenasion-windows
+          path: |
+            dist/*.exe
+            dist/*.sha256
+            smoke/
+          retention-days: 30
+
+      - name: Publicar pre-release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          python tools/release_notes.py $version --out release-notes.md `
+            --exe "${{ steps.hash.outputs.name }}" --mb "${{ steps.hash.outputs.mb }}" --sha "${{ steps.hash.outputs.sha }}"
+          if ($LASTEXITCODE -ne 0) { throw "No se pudieron generar las notas" }
+          gh release create "${{ github.ref_name }}" "${{ steps.hash.outputs.exe }}" "${{ steps.hash.outputs.exe }}.sha256" `
+            --title "Ordenasion $version" --notes-file release-notes.md --prerelease --verify-tag
