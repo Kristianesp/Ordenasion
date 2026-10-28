@@ -26,7 +26,7 @@ class AppConfig:
     DEFAULT_CONFIG = {
         "interface": {
             "font_size": 13,
-            "theme": "🌞 Claro Elegante",  # Tema por defecto (nombre unificado con themes.py)
+            "theme": "🌞 Claro Elegante",  # Nombre heredado; el aspecto lo decide theme_mode
             "theme_mode": "system",
             "accent_color": "#0078D4",
             "density": "comfortable",
