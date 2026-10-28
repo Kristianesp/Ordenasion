@@ -43,7 +43,7 @@ New-Item -ItemType Directory -Force artifacts/release-v4.0.2 | Out-Null
 $buildOriginalPath = $env:PATH
 $buildPythonBase = & .\venv\Scripts\python.exe -c "import sys; print(sys.base_prefix)"
 $env:PATH = "$PWD\venv\Scripts;$buildPythonBase;$env:WINDIR\System32;$env:WINDIR"
-.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --distpath artifacts/release-v4.0.2/dist --workpath artifacts/release-v4.0.2/build OrganizadorAlpha_OPTIMIZED.spec
+.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --distpath artifacts/release-v4.0.2/dist --workpath artifacts/release-v4.0.2/build Ordenasion.spec
 $env:PATH = $buildOriginalPath
 ```
 

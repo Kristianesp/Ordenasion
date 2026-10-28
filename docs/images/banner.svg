@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="title desc">
-  <title id="title">Ordenasion Alpha 3.5 — Tu espacio, en orden</title>
+  <title id="title">Ordenasion — Tu espacio, en orden</title>
   <desc id="desc">Identidad azul de Ordenasion: carpeta y paneles ordenados. Organiza archivos, descubre qué ocupa espacio y cuida tu biblioteca musical.</desc>
   <defs>
     <linearGradient id="ocean" x2="1" y2="1"><stop stop-color="#101e36"/><stop offset=".6" stop-color="#142c43"/><stop offset="1" stop-color="#143c49"/></linearGradient>
@@ -12,8 +12,8 @@
   <rect x="770" y="52" width="306" height="280" rx="32" fill="url(#glass)" stroke="#a2dcff" stroke-opacity=".18" transform="rotate(9 923 192)"/>
   <rect x="797" y="78" width="306" height="280" rx="32" fill="url(#glass)" stroke="#a2dcff" stroke-opacity=".25" transform="rotate(-6 950 218)"/>
   <rect x="48" y="40" width="160" height="28" rx="14" fill="#349ee4" fill-opacity=".17" stroke="#77c8ff" stroke-opacity=".3"/>
-  <text x="128" y="59" text-anchor="middle" font-family="Nunito" font-size="12" font-weight="600" fill="#b9e6ff" letter-spacing="1.7">WINDOWS · 4.0.0</text>
-  <text x="48" y="137" font-family="Nunito" font-size="61" font-weight="700" letter-spacing="-2.5" fill="#f3f9ff">Ordenasion<tspan font-size="23" font-weight="400" letter-spacing=".2" fill="#a6cce3"> Alpha</tspan></text>
+  <text x="128" y="59" text-anchor="middle" font-family="Nunito" font-size="12" font-weight="600" fill="#b9e6ff" letter-spacing="1.7">WINDOWS · 4.0.2</text>
+  <text x="48" y="137" font-family="Nunito" font-size="61" font-weight="700" letter-spacing="-2.5" fill="#f3f9ff">Ordenasion</text>
   <text x="51" y="190" font-family="Nunito" font-size="31" font-weight="400" fill="#8ed8ff">Tu espacio, en orden.</text>
   <text x="51" y="237" font-family="Nunito" font-size="18" fill="#c2d6e7">Organiza archivos. Descubre qué ocupa espacio.</text>
   <text x="51" y="266" font-family="Nunito" font-size="18" fill="#c2d6e7">Cuida tu biblioteca musical.</text>

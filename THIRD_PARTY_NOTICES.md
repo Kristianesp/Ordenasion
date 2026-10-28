@@ -1,6 +1,6 @@
 # Third-party notices
 
-Ordenasion Alpha is distributed under the GNU General Public License v3.0.
+Ordenasion is distributed under the GNU General Public License v3.0.
 
 ## PyQt6
 

@@ -82,7 +82,7 @@ descargar*.bat
 *.tmp
 
 # Fuentes de empaquetado y lanzador mantenidas; no binarios ni capturas QA.
-!OrganizadorAlpha_OPTIMIZED.spec
+!Ordenasion.spec
 !arrancar_ordenasion.bat
 artifacts/
 .venv/

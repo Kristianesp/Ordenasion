@@ -38,7 +38,7 @@ def test_release_version_and_spec_use_fluent_assets_without_private_data():
         calls["splash"] = image, kwargs
         return SimpleNamespace(binaries=[("tcl86t.dll", "tcl/tcl86t.dll", "BINARY")])
 
-    spec = (ROOT / "OrganizadorAlpha_OPTIMIZED.spec").read_text(encoding="utf-8")
+    spec = (ROOT / "Ordenasion.spec").read_text(encoding="utf-8")
     exec(compile(spec, "release.spec", "exec"), {"SPECPATH": str(ROOT), "Analysis": analysis,
          "PYZ": lambda *_: None, "EXE": exe, "Splash": splash})
     args, options = calls["analysis"]
@@ -82,7 +82,7 @@ def test_onedir_spec_collects_portable_folder(monkeypatch):
         calls["collect"] = args, kwargs
 
     monkeypatch.setenv("ORDENASION_ONEDIR", "1")
-    spec = (ROOT / "OrganizadorAlpha_OPTIMIZED.spec").read_text(encoding="utf-8")
+    spec = (ROOT / "Ordenasion.spec").read_text(encoding="utf-8")
     exec(compile(spec, "release.spec", "exec"), {"SPECPATH": str(ROOT), "Analysis": analysis,
          "PYZ": lambda *_: None, "EXE": exe, "COLLECT": collect})
     assert calls["exe"][1]["exclude_binaries"] and not calls["exe"][1]["console"]
