@@ -19,6 +19,7 @@ git tag v4.0.0
 git push origin v4.0.0
 ```
 
+- **Sin empujar la etiqueta:** también puedes publicar desde Actions → «Release Windows» → «Run workflow», marcando «publicar». En ese caso el workflow crea la etiqueta `v<APP_VERSION>` en el commit elegido.
 - **Si la etiqueta no coincide con `APP_VERSION`**, el workflow falla sin publicar nada.
 - **Las notas de la release** salen de la sección de esa versión en `CHANGELOG.md` (`tools/release_notes.py`).
 - **En un PR** que toque la spec, los requirements o el propio workflow, se compila y se pasa el smoke, pero no se publica. El EXE queda como artefacto del run durante 30 días.
