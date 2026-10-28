@@ -35,7 +35,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon, QPalette, QColor
 
-from src.utils.constants import COLORS, DIALOG_STYLES
 from src.core.category_manager import CategoryManager
 from src.gui.rule_panel import RulePanel
 from src.gui.v2.theme import apply_control_sizes

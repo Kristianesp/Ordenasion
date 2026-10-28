@@ -50,7 +50,7 @@ Luego copia `smartctl.exe` a `bin\`
 Una vez colocado `smartctl.exe` en `bin\`:
 
 ```bash
-python main.py
+python main_fluent.py
 ```
 
 Deberías ver en la consola:
@@ -170,7 +170,7 @@ La aplicación detectará su ausencia y usará el fallback (datos desde arranque
 
 **Descarga smartctl.exe y colócalo en `bin\`**, luego prueba la aplicación con:
 ```bash
-python main.py
+python main_fluent.py
 ```
 
 Deberías ver datos lifetime reales y precisos para cada disco.
