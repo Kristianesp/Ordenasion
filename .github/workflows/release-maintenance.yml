@@ -1,7 +1,7 @@
 name: Mantenimiento de releases
 
-# Ejecución manual: borra una release (conserva su etiqueta en el historial)
-# y/o marca otra como versión definitiva («Latest»).
+# Ejecución manual: borra una release (conserva su etiqueta en el historial),
+# marca otra como versión definitiva («Latest») y/o borra ramas ya fusionadas.
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +11,10 @@ on:
         default: ""
       definitiva:
         description: "Etiqueta de la release a marcar como definitiva (Latest); vacío para no tocar"
+        type: string
+        default: ""
+      borrar_ramas:
+        description: "Ramas a borrar, separadas por espacios (sólo si no tienen commits fuera de main)"
         type: string
         default: ""
 
@@ -25,6 +29,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       BORRAR: ${{ inputs.borrar }}
       DEFINITIVA: ${{ inputs.definitiva }}
+      RAMAS: ${{ inputs.borrar_ramas }}
     steps:
       - name: Validar etiquetas
         run: |
@@ -50,3 +55,22 @@ jobs:
           gh release edit "$DEFINITIVA" --prerelease=false --latest
           gh release view "$DEFINITIVA" --json tagName,isPrerelease
           echo "- Release $DEFINITIVA marcada como definitiva (Latest)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Borrar ramas fusionadas
+        if: inputs.borrar_ramas != ''
+        run: |
+          base=$(gh api "repos/$GH_REPO" --jq .default_branch)
+          status=0
+          for branch in $RAMAS; do
+            if ! [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] || [ "$branch" = "$base" ]; then
+              echo "Rama no válida o protegida: $branch" >&2; status=1; continue
+            fi
+            # Nunca se borra trabajo: la rama no puede tener commits fuera de la principal
+            ahead=$(gh api "repos/$GH_REPO/compare/$base...$branch" --jq .ahead_by) || { status=1; continue; }
+            if [ "$ahead" != "0" ]; then
+              echo "La rama $branch tiene $ahead commits fuera de $base: no se borra" >&2; status=1; continue
+            fi
+            gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$branch"
+            echo "- Rama $branch borrada (ya estaba en $base)" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit $status

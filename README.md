@@ -1,8 +1,8 @@
 <div align="center">
 
-![Ordenasion Alpha 4.0.0 — Tu espacio, en orden](docs/images/banner.png)
+![Ordenasion — Tu espacio, en orden](docs/images/banner.png)
 
-# Ordenasion Alpha
+# Ordenasion
 
 **Organiza tus archivos con control. Entiende tu espacio. Cuida tu música.**
 
@@ -11,7 +11,7 @@
 ![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square)
 [![Licencia GPL v3](https://img.shields.io/badge/licencia-GPL_v3-42A5A0?style=flat-square)](LICENSE)
 
-[**⬇ Descargar la última versión**](https://github.com/Kristianesp/Ordenasion_alpha/releases/latest) · [Changelog](CHANGELOG.md) · [Código](https://github.com/Kristianesp/Ordenasion_alpha/tree/main)
+[**⬇ Descargar la última versión**](https://github.com/Kristianesp/Ordenasion/releases/latest) · [Changelog](CHANGELOG.md) · [Código](https://github.com/Kristianesp/Ordenasion/tree/main)
 
 </div>
 
@@ -74,15 +74,15 @@ Tus datos (configuración, cachés e historial) se guardan ahora en `%LOCALAPPDA
 
 ### Con el ejecutable
 
-Descarga de la [última versión publicada](https://github.com/Kristianesp/Ordenasion_alpha/releases/latest) el `.exe` (un solo archivo) o el `_portable.zip` (descomprímelo y abre el `.exe` de dentro: arranca más rápido) y ábrelo en Windows; no necesitas instalar Python. Elige una carpeta, analiza y revisa los movimientos antes de confirmar.
+Descarga de la [última versión publicada](https://github.com/Kristianesp/Ordenasion/releases/latest) el `.exe` (un solo archivo) o el `_portable.zip` (descomprímelo y abre el `.exe` de dentro: arranca más rápido) y ábrelo en Windows; no necesitas instalar Python. Elige una carpeta, analiza y revisa los movimientos antes de confirmar.
 
 ### Desde el código
 
 En Windows, con Git y Python 3.12 x64:
 
 ```powershell
-git clone https://github.com/Kristianesp/Ordenasion_alpha.git
-cd Ordenasion_alpha
+git clone https://github.com/Kristianesp/Ordenasion.git
+cd Ordenasion
 py -3.12 -m venv venv
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 .\arrancar_ordenasion.bat

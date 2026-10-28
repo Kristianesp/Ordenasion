@@ -10,7 +10,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release.yml"
-      - "OrganizadorAlpha_OPTIMIZED.spec"
+      - "Ordenasion.spec"
       - "requirements*.txt"
       - "packaging/**"
       - "main_fluent.py"
@@ -68,10 +68,10 @@ jobs:
           $scripts = Split-Path $python
           # PATH acotado: no recoger DLL de otras herramientas instaladas en el runner
           $env:PATH = "$scripts;$base;$env:WINDIR\System32;$env:WINDIR"
-          & $python -m PyInstaller --clean --noconfirm --distpath dist-onefile --workpath build-onefile OrganizadorAlpha_OPTIMIZED.spec
+          & $python -m PyInstaller --clean --noconfirm --distpath dist-onefile --workpath build-onefile Ordenasion.spec
           if ($LASTEXITCODE -ne 0) { throw "PyInstaller (onefile) falló" }
           $env:ORDENASION_ONEDIR = "1"
-          & $python -m PyInstaller --clean --noconfirm --distpath dist-onedir --workpath build-onedir OrganizadorAlpha_OPTIMIZED.spec
+          & $python -m PyInstaller --clean --noconfirm --distpath dist-onedir --workpath build-onedir Ordenasion.spec
           if ($LASTEXITCODE -ne 0) { throw "PyInstaller (onedir) falló" }
 
       - name: Smoke de los dos formatos

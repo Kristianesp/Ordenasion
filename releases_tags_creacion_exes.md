@@ -25,7 +25,7 @@ git push origin v4.0.2
 - **En un PR** que toque la spec, los requirements o el propio workflow, se compila y se pasa el smoke, pero no se publica. El EXE queda como artefacto del run durante 30 días.
 
 Cuando la versión esté validada en equipos reales, márcala como definitiva:
-- desde Actions → «Mantenimiento de releases» → «Run workflow», con su etiqueta en «definitiva» (el mismo workflow borra una release antigua con «borrar», conservando la etiqueta);
+- desde Actions → «Mantenimiento de releases» → «Run workflow», con su etiqueta en «definitiva» (el mismo workflow borra una release antigua con «borrar», conservando la etiqueta); y con «borrar_ramas» borra ramas ya fusionadas, sólo si no tienen commits fuera de `main`);
 - en GitHub: Releases → editar → desmarcar «Set as a pre-release»;
 - o con `gh release edit v4.0.2 --prerelease=false --latest`.
 
@@ -43,7 +43,7 @@ New-Item -ItemType Directory -Force artifacts/release-v4.0.2 | Out-Null
 $buildOriginalPath = $env:PATH
 $buildPythonBase = & .\venv\Scripts\python.exe -c "import sys; print(sys.base_prefix)"
 $env:PATH = "$PWD\venv\Scripts;$buildPythonBase;$env:WINDIR\System32;$env:WINDIR"
-.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --distpath artifacts/release-v4.0.2/dist --workpath artifacts/release-v4.0.2/build OrganizadorAlpha_OPTIMIZED.spec
+.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --distpath artifacts/release-v4.0.2/dist --workpath artifacts/release-v4.0.2/build Ordenasion.spec
 $env:PATH = $buildOriginalPath
 ```
 

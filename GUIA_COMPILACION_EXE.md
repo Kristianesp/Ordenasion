@@ -13,7 +13,7 @@ smoke del EXE y publicación) está en
 | Elemento | Valor |
 |---|---|
 | Punto de entrada | `main_fluent.py` (el único; `main.py` y `main_optimized.py` ya no existen) |
-| Spec de PyInstaller | `OrganizadorAlpha_OPTIMIZED.spec` (la única) |
+| Spec de PyInstaller | `Ordenasion.spec` (la única) |
 | Resultado | `Ordenasion_v4.0.2.exe` (onefile, sin consola, con imagen de carga) y, con `ORDENASION_ONEDIR=1`, la carpeta portable `Ordenasion_v4.0.2\` |
 | Nombre y versión | Salen de `src/utils/version.py` (`EXECUTABLE_NAME`, `APP_VERSION`) |
 | Metadatos PE | `packaging/windows_version_info.txt` |
@@ -36,11 +36,11 @@ py -3 -m venv venv
 .\venv\Scripts\python.exe main_fluent.py
 
 # Compilar el .exe único
-.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm OrganizadorAlpha_OPTIMIZED.spec
+.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm Ordenasion.spec
 
 # Compilar la carpeta portable (arranca más rápido: no descomprime nada)
 $env:ORDENASION_ONEDIR = "1"
-.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --distpath dist-portable OrganizadorAlpha_OPTIMIZED.spec
+.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --distpath dist-portable Ordenasion.spec
 Remove-Item Env:ORDENASION_ONEDIR
 ```
 
