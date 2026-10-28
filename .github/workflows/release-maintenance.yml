@@ -48,5 +48,5 @@ jobs:
         if: inputs.definitiva != ''
         run: |
           gh release edit "$DEFINITIVA" --prerelease=false --latest
-          gh release view "$DEFINITIVA" --json tagName,isPrerelease,isLatest
+          gh release view "$DEFINITIVA" --json tagName,isPrerelease
           echo "- Release $DEFINITIVA marcada como definitiva (Latest)" >> "$GITHUB_STEP_SUMMARY"
