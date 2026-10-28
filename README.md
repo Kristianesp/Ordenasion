@@ -6,7 +6,7 @@
 
 **Organiza tus archivos con control. Entiende tu espacio. Cuida tu música.**
 
-![Versión 4.0.0](https://img.shields.io/badge/versión-4.0.0-0078D4?style=flat-square)
+![Versión 4.0.1](https://img.shields.io/badge/versión-4.0.1-0078D4?style=flat-square)
 ![Windows](https://img.shields.io/badge/plataforma-Windows-2382C4?style=flat-square)
 ![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square)
 [![Licencia GPL v3](https://img.shields.io/badge/licencia-GPL_v3-42A5A0?style=flat-square)](LICENSE)
@@ -52,6 +52,10 @@ Aplicación de escritorio para Windows, desarrollada con Python y PyQt6. Reúne 
 
 **Tú decides qué se mueve.** La organización incluye vista previa y resolución de conflictos: conservar ambos, sobrescribir u omitir. Cada organización queda en el historial de Actividad y se puede deshacer, también después de cerrar la aplicación. El análisis del espacio es manual y no modifica archivos.
 
+## 🚀 Novedades de 4.0.1
+
+El ejecutable muestra la pantalla de carga al instante y siempre termina abriendo la ventana. Además, se publica una versión **portable (`.zip`)** que arranca mucho más rápido. Si algo falla, el registro queda en `%LOCALAPPDATA%\Ordenasion\logs`.
+
 ## 🚀 Novedades de 4.0.0
 
 1. **Organizar, nativo y seguro:** página Fluent nativa; deshacer persistente con historial en Actividad; «por fecha», cancelar, perfiles y reorganizar corregidos.
@@ -66,7 +70,7 @@ Tus datos (configuración, cachés e historial) se guardan ahora en `%LOCALAPPDA
 
 ### Con el ejecutable
 
-Descarga el ejecutable de la [última versión publicada](https://github.com/Kristianesp/Ordenasion_alpha/releases/latest) y ábrelo en Windows; no necesitas instalar Python. Elige una carpeta, analiza y revisa los movimientos antes de confirmar.
+Descarga de la [última versión publicada](https://github.com/Kristianesp/Ordenasion_alpha/releases/latest) el `.exe` (un solo archivo) o el `_portable.zip` (descomprímelo y abre el `.exe` de dentro: arranca más rápido) y ábrelo en Windows; no necesitas instalar Python. Elige una carpeta, analiza y revisa los movimientos antes de confirmar.
 
 ### Desde el código
 
@@ -84,7 +88,7 @@ El BAT utiliza el entorno virtual local. `arrancar_ordenasion.bat --comprobar` v
 
 ### Compilar y verificar
 
-La [guía de compilación](GUIA_COMPILACION_EXE.md) y la [guía de release](releases_tags_creacion_exes.md) explican las dependencias de build, la spec de PyInstaller y el smoke aislado. El paquete esperado es `Ordenasion_v4.0.0.exe`.
+La [guía de compilación](GUIA_COMPILACION_EXE.md) y la [guía de release](releases_tags_creacion_exes.md) explican las dependencias de build, la spec de PyInstaller y el smoke aislado. El paquete esperado es `Ordenasion_v4.0.1.exe`.
 
 Las [pruebas](tests) cubren organización y deshacer, duplicados, SMART, espacio, temas, audio y empaquetado, y se ejecutan en GitHub Actions en cada push. Para ejecutarlas en el entorno de desarrollo:
 

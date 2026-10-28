@@ -157,3 +157,28 @@ def test_badge_stays_hidden_after_theme_change(shell):
     shell._cleanup_theme_transition()
     QApplication.processEvents()
     assert badge.isHidden()
+
+
+def test_home_disk_snapshot_never_blocks_the_window(shell):
+    """Una unidad lenta (red desconectada, lector) no debe congelar el arranque."""
+    import time
+    from src.core.disk_manager import DiskInfo
+
+    disk = DiskInfo(device="C:\\", mountpoint="C:\\", filesystem="NTFS", total_size=100, used_size=40,
+                    free_size=60, usage_percent=40.0, is_system_drive=True, is_removable=False,
+                    drive_letter="C", drive_type="fixed", opts="rw,fixed")
+
+    class SlowManager:
+        def get_all_disks(self):
+            time.sleep(1.0)
+            return [disk]
+
+    shell._ensure_disk_manager = lambda: SlowManager()
+    started = time.perf_counter()
+    shell._load_disk_snapshot()
+    assert time.perf_counter() - started < 0.5  # la interfaz sigue libre
+    deadline = time.perf_counter() + 5
+    while not shell._disk_snapshot[0] and time.perf_counter() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.02)
+    assert shell._disk_snapshot[0] == (disk,) and shell._disk_snapshot[2] is None

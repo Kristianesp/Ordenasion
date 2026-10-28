@@ -73,11 +73,20 @@ class FluentStartupSplash(QSplashScreen):
 
     finished = pyqtSignal()
 
+    # Si la ventana final no recibe su primera pintura (drivers, ventanas
+    # sin marco o capas transparentes que Windows no expone), se muestra
+    # igualmente: nunca debe quedarse invisible con opacidad 0.
+    REVEAL_FALLBACK_MS = 2500
+
     def __init__(self, theme_mode="system"):
         self.theme_mode = effective_startup_theme(theme_mode)
         self._window = None
         self._paint_pending = False
+        self.revealed_by_fallback = False
         super().__init__(self._render(), Qt.WindowType.WindowStaysOnTopHint)
+        self._fallback_timer = QTimer(self)
+        self._fallback_timer.setSingleShot(True)
+        self._fallback_timer.timeout.connect(self._force_reveal)
         self.setWindowIcon(branding_icon())
         self.setWindowTitle("Ordenasion")
         self.setAccessibleName("Ordenasion")
@@ -129,6 +138,7 @@ class FluentStartupSplash(QSplashScreen):
         self._window = window
         window.setWindowOpacity(0)
         window.installEventFilter(self)
+        self._fallback_timer.start(self.REVEAL_FALLBACK_MS)
 
     def eventFilter(self, watched, event):
         if watched is self._window:
@@ -144,13 +154,30 @@ class FluentStartupSplash(QSplashScreen):
     def _reveal_window(self):
         window = self._window
         if window is not None and window.isVisible():
-            window.setWindowOpacity(1)
-            window.raise_()
-            window.activateWindow()
-            self.close()
-            self.finished.emit()
+            self._show_final(window)
         else:
             self._paint_pending = False
+
+    def _force_reveal(self):
+        """Plan B: la primera pintura no llegó a tiempo; mostrar la ventana igualmente."""
+        window = self._window
+        if window is None:
+            return
+        self.revealed_by_fallback = True
+        from src.utils.logger import get_logger
+        get_logger().warning("Arranque: la ventana no notificó su primera pintura en %d ms; "
+                             "se muestra igualmente", self.REVEAL_FALLBACK_MS)
+        if not window.isVisible():
+            window.show()
+        self._show_final(window)
+
+    def _show_final(self, window):
+        self._fallback_timer.stop()
+        window.setWindowOpacity(1)
+        window.raise_()
+        window.activateWindow()
+        self.close()
+        self.finished.emit()
 
     def mousePressEvent(self, event):
         # QSplashScreen oculta por defecto al pulsarlo; aquí debe permanecer
@@ -158,6 +185,7 @@ class FluentStartupSplash(QSplashScreen):
         event.accept()
 
     def closeEvent(self, event):
+        self._fallback_timer.stop()
         if self._window is not None:
             self._window.removeEventFilter(self)
             self._window.setWindowOpacity(1)

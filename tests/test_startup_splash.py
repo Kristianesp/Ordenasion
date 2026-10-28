@@ -98,6 +98,33 @@ def test_first_paint_reveals_final_window_and_closes_splash(app):
     window.close()
 
 
+def test_window_without_first_paint_is_revealed_by_fallback(app, monkeypatch):
+    """En algunos Windows la ventana sin marco no notifica su primera pintura."""
+    from PyQt6.QtCore import QEvent, QObject
+
+    class PaintEater(QObject):
+        def eventFilter(self, watched, event):
+            return event.type() == QEvent.Type.Paint
+
+    monkeypatch.setattr(module.FluentStartupSplash, "REVEAL_FALLBACK_MS", 50)
+    splash = module.FluentStartupSplash("dark")
+    window = QWidget()
+    finished = QSignalSpy(splash.finished)
+    splash.show()
+    splash.prepare_window(window)
+    eater = PaintEater()
+    window.installEventFilter(eater)  # se ejecuta antes que el del splash
+    window.show()
+    for _ in range(40):
+        app.processEvents()
+        if finished:
+            break
+        QTest.qWait(10)
+    assert len(finished) == 1 and splash.revealed_by_fallback
+    assert window.isVisible() and window.windowOpacity() == 1 and not splash.isVisible()
+    window.close()
+
+
 def test_early_window_close_also_cleans_up(app):
     splash = module.FluentStartupSplash("light")
     window = QWidget()

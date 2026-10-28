@@ -1,7 +1,8 @@
 name: Release Windows
 
-# Compila el ejecutable en Windows, lo verifica con el smoke aislado y lo
-# publica como pre-release de GitHub al empujar una etiqueta vX.Y.Z o al
+# Compila Ordenasion en Windows en dos formatos (un único .exe y una carpeta
+# portable en .zip), los verifica con el smoke aislado y con un arranque real,
+# y los publica como pre-release de GitHub al empujar una etiqueta vX.Y.Z o al
 # lanzarlo a mano con «publicar» (crea la etiqueta v<APP_VERSION> en el commit).
 on:
   push:
@@ -12,6 +13,9 @@ on:
       - "OrganizadorAlpha_OPTIMIZED.spec"
       - "requirements*.txt"
       - "packaging/**"
+      - "main_fluent.py"
+      - "src/gui/v2/startup_splash.py"
+      - "src/utils/startup_diagnostics.py"
   workflow_dispatch:
     inputs:
       publicar:
@@ -57,52 +61,101 @@ jobs:
             throw "La etiqueta ${{ github.ref_name }} no coincide con APP_VERSION $version"
           }
 
-      - name: Compilar con PyInstaller
+      - name: Compilar (.exe único y carpeta portable)
         run: |
           $python = (Get-Command python).Source
           $base = & $python -c "import sys; print(sys.base_prefix)"
           $scripts = Split-Path $python
           # PATH acotado: no recoger DLL de otras herramientas instaladas en el runner
           $env:PATH = "$scripts;$base;$env:WINDIR\System32;$env:WINDIR"
-          & $python -m PyInstaller --clean --noconfirm --distpath dist --workpath build OrganizadorAlpha_OPTIMIZED.spec
-          if ($LASTEXITCODE -ne 0) { throw "PyInstaller falló" }
+          & $python -m PyInstaller --clean --noconfirm --distpath dist-onefile --workpath build-onefile OrganizadorAlpha_OPTIMIZED.spec
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller (onefile) falló" }
+          $env:ORDENASION_ONEDIR = "1"
+          & $python -m PyInstaller --clean --noconfirm --distpath dist-onedir --workpath build-onedir OrganizadorAlpha_OPTIMIZED.spec
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller (onedir) falló" }
 
-      - name: Smoke del ejecutable
+      - name: Smoke de los dos formatos
         run: |
           $name = python -c "from src.utils.version import EXECUTABLE_NAME; print(EXECUTABLE_NAME)"
-          $exe = Resolve-Path "dist/$name.exe"
           New-Item -ItemType Directory -Force smoke | Out-Null
-          $env:ORDENASION_SMOKE = "1"
-          $env:ORDENASION_SMOKE_REPORT = Join-Path $PWD "smoke/smoke-exe.json"
-          $env:ORDENASION_DATA_DIR = Join-Path $env:RUNNER_TEMP "ordenasion-smoke-data"
-          $env:QT_QPA_PLATFORM = "offscreen"
-          $process = Start-Process -FilePath $exe -WindowStyle Hidden -Wait -PassThru
-          Get-Content $env:ORDENASION_SMOKE_REPORT
-          $report = Get-Content $env:ORDENASION_SMOKE_REPORT -Raw | ConvertFrom-Json
-          if ($process.ExitCode -ne 0 -or $report.status -ne "ok") {
-            Get-Content ($env:ORDENASION_SMOKE_REPORT -replace '\.json$', '.log') -ErrorAction SilentlyContinue
-            throw "Smoke fallido (código $($process.ExitCode), estado $($report.status))"
+          $targets = @{ "onefile" = "dist-onefile/$name.exe"; "onedir" = "dist-onedir/$name/$name.exe" }
+          foreach ($kind in $targets.Keys) {
+            $exe = Resolve-Path $targets[$kind]
+            $env:ORDENASION_SMOKE = "1"
+            $env:ORDENASION_SMOKE_REPORT = Join-Path $PWD "smoke/smoke-$kind.json"
+            $env:ORDENASION_DATA_DIR = Join-Path $env:RUNNER_TEMP "ordenasion-smoke-$kind"
+            $env:QT_QPA_PLATFORM = "offscreen"
+            $process = Start-Process -FilePath $exe -WindowStyle Hidden -Wait -PassThru
+            Get-Content $env:ORDENASION_SMOKE_REPORT
+            $report = Get-Content $env:ORDENASION_SMOKE_REPORT -Raw | ConvertFrom-Json
+            if ($process.ExitCode -ne 0 -or $report.status -ne "ok") {
+              Get-Content ($env:ORDENASION_SMOKE_REPORT -replace '\.json$', '.log') -ErrorAction SilentlyContinue
+              throw "Smoke $kind fallido (código $($process.ExitCode), estado $($report.status))"
+            }
           }
 
-      - name: Tamaño y SHA-256
+      - name: Arranque real (sin smoke, con discos)
+        run: |
+          # Abre el ejecutable como un usuario: plataforma Qt real, gestor de
+          # discos activo. Falla si la ventana no aparece en 90 s y enseña el
+          # log y el volcado de bloqueo para ver dónde se quedó.
+          $name = python -c "from src.utils.version import EXECUTABLE_NAME; print(EXECUTABLE_NAME)"
+          Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+          Remove-Item Env:ORDENASION_SMOKE -ErrorAction SilentlyContinue
+          $targets = [ordered]@{ "onefile" = "dist-onefile/$name.exe"; "onedir" = "dist-onedir/$name/$name.exe" }
+          $failed = @()
+          foreach ($kind in $targets.Keys) {
+            $exe = Resolve-Path $targets[$kind]
+            $data = Join-Path $env:RUNNER_TEMP "ordenasion-real-$kind"
+            $env:ORDENASION_DATA_DIR = $data
+            $log = Join-Path $data "logs/ordenasion.log"
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            $process = Start-Process -FilePath $exe -PassThru
+            $visible = $false
+            while ($clock.Elapsed.TotalSeconds -lt 90) {
+              if ((Test-Path $log) -and (Select-String -Path $log -Pattern "ventana visible" -Quiet)) { $visible = $true; break }
+              if ($process.HasExited) { break }
+              Start-Sleep -Milliseconds 250
+            }
+            $seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1)
+            Start-Sleep -Seconds 1
+            & taskkill /PID $process.Id /T /F | Out-Null
+            Write-Host "===== Arranque real $kind · visible=$visible · $seconds s ====="
+            Get-ChildItem (Join-Path $data "logs") -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "--- $($_.Name)"; Get-Content $_.FullName
+            }
+            "- Arranque real $kind`: $(if ($visible) { "ventana visible en $seconds s" } else { "NO apareció en $seconds s" })" >> $env:GITHUB_STEP_SUMMARY
+            if (-not $visible) { $failed += $kind }
+          }
+          if ($failed) { throw "La ventana no apareció: $($failed -join ', ')" }
+
+      - name: Empaquetar, tamaño y SHA-256
         id: hash
         run: |
-          $exe = Get-ChildItem dist/*.exe | Select-Object -First 1
-          $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
-          $mb = [math]::Round($exe.Length / 1MB, 1)
-          "$sha  $($exe.Name)" | Out-File -Encoding ascii "dist/$($exe.Name).sha256"
-          "exe=$($exe.FullName)" >> $env:GITHUB_OUTPUT
-          "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
-          "sha=$sha" >> $env:GITHUB_OUTPUT
-          "mb=$mb" >> $env:GITHUB_OUTPUT
-          "### $($exe.Name)`n`n- Tamaño: $mb MB`n- SHA-256: ``$sha``" >> $env:GITHUB_STEP_SUMMARY
+          $name = python -c "from src.utils.version import EXECUTABLE_NAME; print(EXECUTABLE_NAME)"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "dist-onefile/$name.exe" "dist/$name.exe"
+          Compress-Archive -Path "dist-onedir/$name" -DestinationPath "dist/${name}_portable.zip" -CompressionLevel Optimal
+          $lines = @()
+          foreach ($file in @("dist/$name.exe", "dist/${name}_portable.zip")) {
+            $item = Get-Item $file
+            $sha = (Get-FileHash $item -Algorithm SHA256).Hash.ToLower()
+            $mb = [math]::Round($item.Length / 1MB, 1)
+            $lines += "$sha  $($item.Name)"
+            $key = if ($item.Extension -eq ".zip") { "zip" } else { "exe" }
+            "${key}=$($item.FullName)" >> $env:GITHUB_OUTPUT
+            "${key}_name=$($item.Name)" >> $env:GITHUB_OUTPUT
+            "${key}_sha=$sha" >> $env:GITHUB_OUTPUT
+            "${key}_mb=$mb" >> $env:GITHUB_OUTPUT
+            "- $($item.Name): $mb MB · SHA-256 ``$sha``" >> $env:GITHUB_STEP_SUMMARY
+          }
+          $lines | Out-File -Encoding ascii "dist/SHA256SUMS.txt"
 
       - uses: actions/upload-artifact@v5
         with:
           name: ordenasion-windows
           path: |
-            dist/*.exe
-            dist/*.sha256
+            dist/
             smoke/
           retention-days: 30
 
@@ -114,9 +167,10 @@ jobs:
           $version = python -c "from src.utils.version import APP_VERSION; print(APP_VERSION)"
           $tag = "v$version"
           python tools/release_notes.py $version --out release-notes.md `
-            --exe "${{ steps.hash.outputs.name }}" --mb "${{ steps.hash.outputs.mb }}" --sha "${{ steps.hash.outputs.sha }}"
+            --exe "${{ steps.hash.outputs.exe_name }}" --mb "${{ steps.hash.outputs.exe_mb }}" --sha "${{ steps.hash.outputs.exe_sha }}" `
+            --portable "${{ steps.hash.outputs.zip_name }}" --portable-mb "${{ steps.hash.outputs.zip_mb }}" --portable-sha "${{ steps.hash.outputs.zip_sha }}"
           if ($LASTEXITCODE -ne 0) { throw "No se pudieron generar las notas" }
           # Con una etiqueta ya empujada se usa tal cual; a mano, se crea en este commit
-          gh release create $tag "${{ steps.hash.outputs.exe }}" "${{ steps.hash.outputs.exe }}.sha256" `
+          gh release create $tag "${{ steps.hash.outputs.exe }}" "${{ steps.hash.outputs.zip }}" "dist/SHA256SUMS.txt" `
             --title "Ordenasion $version" --notes-file release-notes.md --prerelease --target "${{ github.sha }}"
           if ($LASTEXITCODE -ne 0) { throw "No se pudo publicar la release $tag" }

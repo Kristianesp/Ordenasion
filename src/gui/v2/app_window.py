@@ -8,6 +8,7 @@ primera vez que se abren, con las fábricas ``create_*`` de esta ventana.
 """
 
 import os
+import threading
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize, pyqtSignal
@@ -152,6 +153,9 @@ def resolve_page(page):
 class FluentAppWindow(FluentWindow):
     """Ventana V2 con navegación lateral y páginas propias."""
 
+    # (discos, error): llega desde el hilo que enumera las unidades
+    _disk_snapshot_loaded = pyqtSignal(object, object)
+
     def __init__(self, config: AppConfig, controller: OrganizeController | None = None, parent=None, *,
                  category_manager=None, profile_manager: ProfileManager | None = None, app_state=None):
         super().__init__(parent)
@@ -177,6 +181,8 @@ class FluentAppWindow(FluentWindow):
         self._theme_overlay = None
         self._styled_signature = {}
         self._disk_snapshot = ((), None, None)
+        self._disk_snapshot_loading = False
+        self._disk_snapshot_loaded.connect(self._apply_disk_snapshot)
         self._closing = False
 
         self.setObjectName("fluentAppWindow")
@@ -474,17 +480,38 @@ class FluentAppWindow(FluentWindow):
         self._refresh_home_dashboard()
 
     def _load_disk_snapshot(self) -> None:
-        """Lee las unidades (rápido, sin SMART) para Inicio si Discos no existe aún."""
-        if self.built_page("disks") is not None or self._closing:
+        """Lee las unidades para Inicio (sin SMART) en segundo plano.
+
+        Nunca en el hilo de la interfaz: ``disk_usage`` sobre una unidad de red
+        desconectada o un lector lento puede tardar decenas de segundos.
+        """
+        if self.built_page("disks") is not None or self._closing or self._disk_snapshot_loading:
             return
         manager = self._ensure_disk_manager()
         if manager is None:
             return
-        try:
-            disks = tuple(manager.get_all_disks() or ())
+        self._disk_snapshot_loading = True
+
+        def enumerate_disks():
+            try:
+                disks, error = tuple(manager.get_all_disks() or ()), None
+            except Exception as exc:  # Inicio nunca debe romperse por un disco
+                disks, error = None, str(exc)
+            try:
+                self._disk_snapshot_loaded.emit(disks, error)
+            except RuntimeError:  # la ventana ya se destruyó
+                pass
+
+        threading.Thread(target=enumerate_disks, name="inicio-discos", daemon=True).start()
+
+    def _apply_disk_snapshot(self, disks, error) -> None:
+        self._disk_snapshot_loading = False
+        if self._closing:
+            return
+        if error is None:
             self._disk_snapshot = (disks, datetime.now(), None)
-        except Exception as exc:  # Inicio nunca debe romperse por un disco
-            self._disk_snapshot = (self._disk_snapshot[0], self._disk_snapshot[1], str(exc))
+        else:
+            self._disk_snapshot = (self._disk_snapshot[0], self._disk_snapshot[1], error)
         self._refresh_home_dashboard()
 
     def _refresh_home_dashboard(self) -> None:
