@@ -4,13 +4,9 @@ from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QFontMetrics
 from PyQt6.QtWidgets import QWidget, QToolTip
 from src.gui.v2.theme import current_tokens, typography_scale
+from src.utils.formatting import format_bytes  # noqa: F401  (reexportado para la UI)
 
 
-def format_bytes(value: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
-        if value < 1024 or unit == "PB":
-            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
-        value /= 1024
 
 
 def squarified(areas: list[float], bounds: QRectF) -> list[QRectF]:

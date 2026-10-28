@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, 
 from qfluentwidgets import BodyLabel, ComboBox, FluentIcon, LineEdit, PrimaryPushButton, PushButton, ScrollArea, SubtitleLabel
 from src.gui.task_center import task_registry
 from src.gui.v2.components import ActionBar, GlassCard, MetricCard, PageHeader
-from src.gui.v2.dashboard_charts import DiskUsageChart, FolderSizeChart, disk_values
+from src.gui.v2.dashboard_charts import DiskUsageChart, FolderSizeChart, disk_values, usage_percent_of
 from src.gui.v2.space_map import format_bytes
 from src.gui.v2.theme import ElidedPathLabel, current_tokens, typography_scale
 from src.utils.app_config import AppConfig
@@ -33,6 +33,7 @@ class HomePage(ScrollArea):
         self._space_running = False
         self._disk_updated_at = None
         self._disk_error = None
+        self._last_selected_mountpoint = None
         self._metric_columns = 0
         self._chart_columns = 0
         self.setWidgetResizable(True)
@@ -139,12 +140,12 @@ class HomePage(ScrollArea):
         disk.addWidget(self.open_disks_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.space_card, space = self._card("Qué ocupa espacio")
-        self.space_path_label = ElidedPathLabel("Sin análisis de espacio")
+        self.space_path_label = ElidedPathLabel("")
         self.space_path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         space.addWidget(self.space_path_label)
         self.folders_chart = FolderSizeChart(self.config)
         space.addWidget(self.folders_chart)
-        self.space_snapshot_label = BodyLabel("Tamaño lógico de los hijos de la carpeta analizada.")
+        self.space_snapshot_label = BodyLabel("")
         self.space_snapshot_label.setWordWrap(True)
         space.addWidget(self.space_snapshot_label)
         self.open_space_button = PushButton(FluentIcon.SEARCH, "Analizar espacio")
@@ -275,7 +276,10 @@ class HomePage(ScrollArea):
             self.drive_selector.addItem(disk.mountpoint, userData=disk.mountpoint)
         if not self._disks:
             self.drive_selector.addItem("Sin unidades disponibles")
-        desired = current or selected_mountpoint
+        # Si en Discos se elige otra unidad, Inicio la sigue; si no, respeta la elección local.
+        follow = selected_mountpoint and selected_mountpoint != self._last_selected_mountpoint
+        self._last_selected_mountpoint = selected_mountpoint
+        desired = selected_mountpoint if follow else (current or selected_mountpoint)
         index = next((index for index, disk in enumerate(self._disks) if disk.mountpoint == desired), 0)
         self.drive_selector.setCurrentIndex(index)
         self.drive_selector.setEnabled(bool(self._disks))
@@ -287,12 +291,17 @@ class HomePage(ScrollArea):
             self.space_metric.set_value(format_bytes(root.size), f"{space_result.file_count} archivos · {space_result.folder_count} carpetas")
             self.space_metric.setToolTip(f"{space_result.root_path}\n{root.size:,} bytes lógicos")
             self.space_path_label.set_path(space_result.root_path)
+            self.space_path_label.show()
             self.space_snapshot_label.setText("Análisis parcial: hay entradas sin leer." if root.status == "partial" else "Cinco elementos mayores y el resto · tamaño lógico por ruta.")
+            self.space_snapshot_label.show()
             self.open_space_button.setText("Ver análisis de espacio")
         else:
+            # Un único mensaje (el del gráfico); sin repetir "Sin análisis de espacio".
             self.space_metric.set_value("—", "Sin análisis de espacio")
-            self.space_path_label.set_path("Sin análisis de espacio")
-            self.space_snapshot_label.setText("Analiza una carpeta para conocer su distribución.")
+            self.space_path_label.set_path("")
+            self.space_path_label.hide()
+            self.space_snapshot_label.setText("")
+            self.space_snapshot_label.hide()
             self.open_space_button.setText("Analizar espacio")
 
     def _update_drive(self, *_):
@@ -302,7 +311,7 @@ class HomePage(ScrollArea):
         values = disk_values(disk)
         if values:
             total, used, free = values
-            self.disk_metric.set_value(f"{used / total * 100:.1f}%", f"Ocupado · {format_bytes(free)} libres")
+            self.disk_metric.set_value(f"{usage_percent_of(disk, values):.1f}%", f"Ocupado · {format_bytes(free)} libres")
             self.disk_metric.setToolTip(self.usage_chart.accessibleDescription())
         else:
             self.disk_metric.set_value("—", "Ocupación no disponible")

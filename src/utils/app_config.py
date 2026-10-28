@@ -74,6 +74,15 @@ class AppConfig:
             "cycles_bands": {"moderate": 2000, "high": 10000},
             "weights": {"temp": 0.35, "tbw": 0.35, "hours": 0.20, "cycles": 0.10},
         },
+        "disks": {
+            "smart_cache_ttl": 120,  # segundos que se reutiliza una lectura SMART
+            "smart_timeout": 20,  # segundos por consulta a smartctl
+            "smart_history": True,  # historial diario en smart_history.db
+        },
+        "space_usage": {
+            "size_on_disk": True,  # tamaño en disco además del lógico
+            "dedupe_hardlinks": True,  # contar una sola vez los hardlinks
+        },
     }
 
     def __init__(self, config_file: Optional[str] = None):
