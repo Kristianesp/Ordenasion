@@ -23,7 +23,7 @@ from qfluentwidgets import (
 from src.gui.task_center import task_registry
 from src.utils.logger import warn
 from src.utils.paths import open_in_file_manager
-from src.gui.v2.components import EmptyState, GlassCard, PageHeader
+from src.gui.v2.components import EmptyState, GlassCard, PageHeader, prepare_page_surface
 
 
 class ActivityPage(ScrollArea):
@@ -42,10 +42,10 @@ class ActivityPage(ScrollArea):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWidgetResizable(True)
         self.setFrameShape(ScrollArea.Shape.NoFrame)
-        self.enableTransparentBackground()
         self.content = QWidget()
         self.content.setObjectName("activityContent")
         self.setWidget(self.content)
+        prepare_page_surface(self, self.content)
         self._build_ui()
         task_registry.tasks_updated.connect(self.refresh)
         controller.operation_state_changed.connect(self._on_operation_state_changed)

@@ -20,6 +20,24 @@ from src.gui.v2.theme import _config_from_widget, current_tokens, current_glass,
 from qfluentwidgets.window.fluent_window import FluentTitleBarButton
 
 
+PAGE_VIEWPORT_QSS = "QWidget#qt_scrollarea_viewport { background-color: transparent; }"
+
+
+def page_content_qss(content: QWidget) -> str:
+    return f"QWidget#{content.objectName()} {{ background-color: transparent; }}"
+
+
+def prepare_page_surface(page, content: QWidget) -> None:
+    """Deja la página transparente sobre el fondo del shell antes de crear hijos.
+
+    Son las mismas hojas que pone el shell al estilizar la página; aplicadas
+    aquí, con el árbol aún vacío, el shell no tiene que repulir la página.
+    """
+    page.setStyleSheet("")
+    page.viewport().setStyleSheet(PAGE_VIEWPORT_QSS)
+    content.setStyleSheet(page_content_qss(content))
+
+
 class ThemeTitleBarButton(FluentTitleBarButton):
     """Botón SVG reconocido por el hit-test de la barra de título Windows."""
 

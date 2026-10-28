@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, 
 from qfluentwidgets import (BodyLabel, ComboBox, FluentIcon, LineEdit, PrimaryPushButton, PushButton, ScrollArea,
                             SubtitleLabel, TransparentToolButton)
 from src.gui.task_center import task_registry
-from src.gui.v2.components import ActionBar, EmptyState, GlassCard, MetricCard, PageHeader
+from src.gui.v2.components import ActionBar, EmptyState, GlassCard, MetricCard, PageHeader, prepare_page_surface
 from src.utils.paths import open_in_file_manager
 from src.gui.v2.dashboard_charts import DiskUsageChart, FolderSizeChart, disk_values, usage_percent_of
 from src.gui.v2.space_map import format_bytes
@@ -40,12 +40,12 @@ class HomePage(ScrollArea):
         self._chart_columns = 0
         self.setWidgetResizable(True)
         self.setFrameShape(ScrollArea.Shape.NoFrame)
-        self.enableTransparentBackground()
         self.content = QWidget()
         self.content.setObjectName("homeContent")
         self.content.setMinimumWidth(0)
         self.content.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.setWidget(self.content)
+        prepare_page_surface(self, self.content)
         self._build_ui()
         task_registry.tasks_updated.connect(self.refresh_metrics)
         self.refresh()
