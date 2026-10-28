@@ -2,13 +2,15 @@
 
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF
 from PyQt6.QtGui import QPainter, QLinearGradient, QPen
-from PyQt6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     CardWidget,
     IconWidget,
+    MessageBoxBase,
     PrimaryPushButton,
+    PushButton,
     SubtitleLabel,
     TitleLabel,
     TransparentToolButton,
@@ -218,3 +220,66 @@ class FeatureCard(GlassCard):
         layout.addLayout(text_layout, 1)
 
         self.clicked.connect(self.activated.emit)
+
+
+class EmptyState(QWidget):
+    """Estado vacío común: icono, una frase y, opcionalmente, una acción principal."""
+
+    action_requested = pyqtSignal()
+
+    def __init__(self, icon, text: str, action_text: str = "", parent=None, primary: bool = True):
+        super().__init__(parent)
+        self.setObjectName("emptyState")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 24, 16, 24)
+        layout.setSpacing(10)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_widget = IconWidget(icon)
+        self.icon_widget.setFixedSize(40, 40)
+        layout.addWidget(self.icon_widget, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.text_label = BodyLabel(text)
+        self.text_label.setWordWrap(True)
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.text_label)
+        button_class = PrimaryPushButton if primary else PushButton
+        self.action_button = button_class()
+        self.action_button.setText(action_text)
+        self.action_button.setAccessibleName(action_text or "Acción")
+        self.action_button.setVisible(bool(action_text))
+        self.action_button.clicked.connect(self.action_requested.emit)
+        layout.addWidget(self.action_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+    def set_text(self, text: str) -> None:
+        self.text_label.setText(text)
+
+    def set_action(self, action_text: str) -> None:
+        self.action_button.setText(action_text)
+        self.action_button.setAccessibleName(action_text or "Acción")
+        self.action_button.setVisible(bool(action_text))
+
+
+class ShortcutsDialog(MessageBoxBase):
+    """Ayuda de atajos de teclado (F1), con el estilo de los diálogos Fluent."""
+
+    def __init__(self, shortcuts, parent=None):
+        super().__init__(parent)
+        self.setObjectName("shortcutsDialog")
+        title = SubtitleLabel("Atajos de teclado")
+        self.viewLayout.addWidget(title)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(6)
+        self.rows = []
+        for row, (sequence, description) in enumerate(shortcuts):
+            key = BodyLabel(sequence)
+            key.setObjectName("shortcutKey")
+            key.setStyleSheet("font-weight: 600;")
+            text = BodyLabel(description)
+            grid.addWidget(key, row, 0)
+            grid.addWidget(text, row, 1)
+            self.rows.append((sequence, description))
+        self.viewLayout.addLayout(grid)
+        self.yesButton.setText("Cerrar")
+        self.cancelButton.hide()
+        self.widget.setMinimumWidth(420)

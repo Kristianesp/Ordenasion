@@ -174,6 +174,8 @@ class DiskViewer(QWidget):
 
     def refresh_disks(self) -> None:
         """Vuelve a enumerar las unidades (rápido: sin SMART en este hilo)."""
+        if self.disk_manager is None or getattr(self, "_closed", False):
+            return
         try:
             self.log_message("Actualizando información de unidades…")
             disks = self.disk_manager.get_all_disks()

@@ -4,8 +4,8 @@ import os
 from src.utils.version import APP_NAME, APP_VERSION
 
 from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize
-from PyQt6.QtGui import QColor, QKeySequence, QShortcut
-from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QKeySequence, QShortcut
+from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QMenu, QWidget
 from qfluentwidgets import FluentIcon, FluentIconBase, FluentWindow, NavigationItemPosition, FluentStyleSheet, getStyleSheet, isDarkTheme, InfoBar, InfoBarPosition
 
 from src.gui.v2.pages.activity_page import ActivityPage
@@ -67,11 +67,17 @@ class FluentAppWindow(FluentWindow):
         self.theme_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.theme_button.setIconSize(QSize(20, 20))
         self.theme_button.clicked.connect(self._toggle_theme)
+        self.theme_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.theme_button.customContextMenuRequested.connect(self._show_theme_menu)
         self.titleBar.buttonLayout.insertWidget(0, self.theme_button)
         self.titleBar.setFixedHeight(36)
         self._apply_shell_styles()
         self._connect_controller()
         self._setup_shortcuts()
+        hints = QGuiApplication.styleHints()
+        scheme_changed = getattr(hints, "colorSchemeChanged", None)
+        if scheme_changed is not None:  # Qt >= 6.5
+            scheme_changed.connect(self._on_system_color_scheme_changed)
         # El modal reutilizado solicita un refresco Fluent al guardar fuente;
         # evita que el controlador antiguo reinstale su paleta global.
         self.legacy_window.refresh_fluent_appearance = self._refresh_theme
@@ -151,6 +157,7 @@ class FluentAppWindow(FluentWindow):
             self.legacy_window.open_configuration
         )
         settings.theme_changed.connect(self._refresh_theme)
+        settings.theme_mode_selected.connect(self.set_theme_mode)
         self._add_route(
             "settings",
             settings,
@@ -181,6 +188,7 @@ class FluentAppWindow(FluentWindow):
         space = self._routes["disks"].space_page
         space.result_changed.connect(lambda _result: self._refresh_home_dashboard())
         space.scan_state_changed.connect(home.set_space_scan_active)
+        space.organize_requested.connect(self._analyze_from_home)
         self.legacy_window.disk_viewer.disks_refreshed.connect(lambda _disks: self._refresh_home_dashboard())
         self._refresh_home_dashboard()
 
@@ -213,8 +221,7 @@ class FluentAppWindow(FluentWindow):
                 palette_targets.append(viewport)
                 viewport.setAutoFillBackground(False)
                 viewport.setStyleSheet(
-                    f"QWidget#qt_scrollarea_viewport {{"
-                    " background-color: transparent; }}"
+                    "QWidget#qt_scrollarea_viewport { background-color: transparent; }"
                 )
             if content is not None:
                 palette_targets.append(content)
@@ -406,9 +413,12 @@ class FluentAppWindow(FluentWindow):
         dark = isDarkTheme()
         destination = "claro" if dark else "oscuro"
         state = "oscuro" if dark else "claro"
+        if self.config.get_theme_mode() == "system":
+            state += " (sistema)"
         icon = FluentIcon.BRIGHTNESS if dark else FluentIcon.QUIET_HOURS
         self.theme_button.setIcon(icon.icon(color=tokens.text_primary))
-        self.theme_button.setToolTip(f"Tema {state}. Cambiar a {destination}")
+        self.theme_button.setToolTip(
+            f"Tema {state}. Cambiar a {destination} (clic derecho: Claro, Oscuro o Sistema)")
         self.theme_button.setAccessibleName(f"Tema {state}. Cambiar a tema {destination}")
         self.theme_button.setFixedSize(36, 36)
         self.theme_button.setNormalColor(QColor(tokens.text_primary))
@@ -417,10 +427,45 @@ class FluentAppWindow(FluentWindow):
         self.theme_button.setHoverBackgroundColor(QColor(tokens.surface_alt))
         self.theme_button.setPressedBackgroundColor(QColor(tokens.surface))
 
+    THEME_MODE_LABELS = (("light", "Claro"), ("dark", "Oscuro"), ("system", "Sistema"))
+
+    def _show_theme_menu(self, position=None) -> QMenu:
+        """Menú del botón de tema (clic derecho): Claro, Oscuro o Sistema."""
+        from src.gui.v2.theme import apply_menu_surface
+        menu = QMenu(self)
+        menu.setObjectName("themeModeMenu")
+        group = QActionGroup(menu)
+        current = self.config.get_theme_mode()
+        for mode, label in self.THEME_MODE_LABELS:
+            action = QAction(label, menu, checkable=True)
+            action.setChecked(mode == current)
+            action.triggered.connect(lambda _checked=False, target=mode: self.set_theme_mode(target))
+            group.addAction(action)
+            menu.addAction(action)
+        apply_menu_surface(menu, self.config)
+        self._theme_menu = menu
+        if position is not None:
+            menu.popup(self.theme_button.mapToGlobal(position))
+        return menu
+
+    def set_theme_mode(self, mode: str) -> bool:
+        """Elige Claro, Oscuro o Sistema (desde Configuración o el menú del botón)."""
+        if mode == self.config.get_theme_mode():
+            return False
+        return self._change_theme_mode(mode)
+
+    def _on_system_color_scheme_changed(self, *_args) -> None:
+        """Con el modo Sistema, sigue al sistema operativo en caliente."""
+        if self.config.get_theme_mode() != "system" or self._theme_transition_active:
+            return
+        self._refresh_theme()
+
     def _toggle_theme(self) -> bool:
+        return self._change_theme_mode("light" if isDarkTheme() else "dark")
+
+    def _change_theme_mode(self, target: str) -> bool:
         if self._theme_transition_active:
             return False
-        target = "light" if isDarkTheme() else "dark"
         snapshot = self.stackedWidget.grab()
         if not self.config.set_theme_mode(target):
             InfoBar.error("No se pudo guardar el tema", "El tema anterior sigue activo. Revisa los permisos y vuelve a intentarlo.",
@@ -469,21 +514,80 @@ class FluentAppWindow(FluentWindow):
         if hasattr(self, "theme_button"):
             self.theme_button.setEnabled(True)
 
-    def _setup_shortcuts(self) -> None:
-        shortcuts: tuple[tuple[str, str], ...] = (
-            ("Ctrl+1", "home"),
-            ("Ctrl+2", "organize"),
-            ("Ctrl+3", "disks"),
-            ("Ctrl+4", "music"),
-            ("Ctrl+5", "duplicates"),
-            ("Ctrl+6", "activity"),
-            ("Ctrl+7", "settings"),
+    NAVIGATION_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
+        ("Ctrl+1", "home", "Ir a Inicio"),
+        ("Ctrl+2", "organize", "Ir a Organizar"),
+        ("Ctrl+3", "disks", "Ir a Discos"),
+        ("Ctrl+4", "music", "Ir a Música"),
+        ("Ctrl+5", "duplicates", "Ir a Duplicados"),
+        ("Ctrl+6", "activity", "Ir a Actividad"),
+        ("Ctrl+7", "settings", "Ir a Configuración"),
+    )
+
+    def shortcut_table(self) -> list[tuple[str, str]]:
+        """(secuencia, descripción) de todos los atajos, para la ayuda (F1)."""
+        return [(seq, text) for seq, text, _ in self._action_shortcuts()] + [
+            (seq, text) for seq, _, text in self.NAVIGATION_SHORTCUTS
+        ]
+
+    def _action_shortcuts(self):
+        legacy = self.legacy_window
+        return (
+            ("Ctrl+O", "Elegir carpeta para organizar", lambda: self._on_organize(legacy.browse_folder)),
+            ("F5", "Analizar la carpeta actual", lambda: self._on_organize(legacy.start_analysis)),
+            ("Ctrl+R", "Analizar la carpeta actual", lambda: self._on_organize(legacy.start_analysis)),
+            ("Ctrl+S", "Revisar y organizar la selección", lambda: self._on_organize(legacy.start_organization)),
+            ("Ctrl+F", "Buscar en los resultados", self._focus_search),
+            ("Ctrl+L", "Limpiar el registro", legacy.clear_log),
+            ("Ctrl+P", "Configuración avanzada", legacy.open_configuration),
+            ("Ctrl+,", "Configuración", lambda: self._switch_route("settings")),
+            ("F1", "Mostrar esta ayuda", self.show_shortcuts_help),
+            ("Ctrl+Q", "Salir", self.close),
         )
-        for sequence, route in shortcuts:
+
+    def _setup_shortcuts(self) -> None:
+        # Los atajos viven en el shell: la QMainWindow heredada está oculta y
+        # sus QShortcut nunca se disparaban.
+        self._shortcuts: dict[str, QShortcut] = {}
+        for sequence, _text, callback in self._action_shortcuts():
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(callback)
+            self._shortcuts[sequence] = shortcut
+        for sequence, route, _text in self.NAVIGATION_SHORTCUTS:
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.activated.connect(
                 lambda destination=route: self._switch_route(destination)
             )
+            self._shortcuts[sequence] = shortcut
+        # Seleccionar/deseleccionar solo dentro de Organizar: Ctrl+A sigue
+        # seleccionando texto en los campos (ShortcutOverride del QLineEdit).
+        organize = self._routes["organize"]
+        for sequence, callback in (("Ctrl+A", self.legacy_window.select_all_items),
+                                   ("Ctrl+D", self.legacy_window.deselect_all_items)):
+            shortcut = QShortcut(QKeySequence(sequence), organize)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(callback)
+            self._shortcuts[sequence] = shortcut
+
+    def _on_organize(self, action) -> None:
+        self._switch_route("organize")
+        action()
+
+    def _focus_search(self) -> None:
+        if self.stackedWidget.currentWidget() is self._routes.get("organize"):
+            search = self.legacy_window.filter_bar.search_input
+            search.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            search.selectAll()
+            return
+        self._switch_route("duplicates")
+
+    def show_shortcuts_help(self) -> None:
+        from src.gui.v2.components import ShortcutsDialog
+        dialog = ShortcutsDialog(self.shortcut_table(), self)
+        self._shortcuts_dialog = dialog
+        dialog.exec()
+        self._shortcuts_dialog = None
 
     def _adapt_navigation(self) -> None:
         if self.width() >= 1200:
@@ -527,8 +631,14 @@ class FluentAppWindow(FluentWindow):
 
     def _show_last_result(self) -> None:
         from src.gui.operation_summary_dialog import OperationSummaryDialog
-        if self.legacy_window.last_operation_summary:
-            OperationSummaryDialog(self.legacy_window.last_operation_summary, self).exec()
+        summary = self.legacy_window.last_operation_summary
+        if not summary:
+            return
+        transaction_id = summary.get("transaction_id")
+        undo = None
+        if transaction_id and not summary.get("undone"):
+            undo = lambda: self.legacy_window.rollback_transaction(transaction_id, confirm=False)
+        OperationSummaryDialog(summary, self, undo_callback=undo).exec()
 
     def _analyze_from_home(self, path: str) -> None:
         self._switch_route("organize")
@@ -538,6 +648,9 @@ class FluentAppWindow(FluentWindow):
     def _refresh_theme(self) -> None:
         apply_fluent_theme(self.config)
         self._apply_shell_styles()
+        settings = self._routes.get("settings")
+        if settings is not None:
+            settings.sync_theme_selector()
         for page in self._legacy_pages.values():
             page.refresh_theme(self.config)
         self.legacy_window.log_message("Tema Fluent actualizado")
@@ -547,6 +660,10 @@ class FluentAppWindow(FluentWindow):
         if disks is not None and disks.request_shutdown(self.close):
             event.ignore()
             return
+        if not self.legacy_window.request_shutdown():
+            event.ignore()
+            return
         self._cleanup_theme_transition()
+        self.legacy_window.disk_viewer.shutdown()
         self.legacy_window.close()
         super().closeEvent(event)

@@ -199,13 +199,35 @@ class OceanBackdrop(QWidget):
         painter.drawPixmap(0, 0, self._image)
 
 
+def system_prefers_dark() -> bool | None:
+    """Esquema de color del sistema según Qt (None si Qt no lo sabe)."""
+    from PyQt6.QtGui import QGuiApplication
+    if QGuiApplication.instance() is None:
+        return None
+    hints = QGuiApplication.styleHints()
+    color_scheme = getattr(hints, "colorScheme", None)
+    if color_scheme is None:  # Qt < 6.5
+        return None
+    scheme = color_scheme()
+    if scheme == Qt.ColorScheme.Dark:
+        return True
+    if scheme == Qt.ColorScheme.Light:
+        return False
+    return None
+
+
 def _to_theme(mode: str) -> Theme:
     normalized = mode.lower()
     if normalized == "light":
         return Theme.LIGHT
     if normalized == "dark":
         return Theme.DARK
-    return Theme.AUTO
+    # Sistema: Qt conoce el esquema vivo (también tras un cambio en caliente);
+    # si no lo sabe, qfluentwidgets lo detecta con darkdetect.
+    prefers_dark = system_prefers_dark()
+    if prefers_dark is None:
+        return Theme.AUTO
+    return Theme.DARK if prefers_dark else Theme.LIGHT
 
 
 def current_tokens(
