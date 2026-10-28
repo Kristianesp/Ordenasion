@@ -226,6 +226,7 @@ def test_elevated_command_is_safe_and_reads_json(monkeypatch, tmp_path):
 
     monkeypatch.setattr(smart, "build_elevated_command", capture)
     monkeypatch.setattr(module, "_shell_execute_elevated", fake_elevated)
+    monkeypatch.setattr(module, "_system_directory", lambda: r"C:\Windows\System32")
     results = smart.query_elevated([("PHYSICALDRIVE0", None)])
     assert results["/dev/pd0"].ok and results["/dev/pd0"].data["smart_status"] is True
     monkeypatch.setattr(module, "_shell_execute_elevated", lambda *a: False)

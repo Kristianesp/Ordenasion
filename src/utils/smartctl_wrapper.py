@@ -593,6 +593,10 @@ class SmartctlWrapper:
         """
         outputs: Dict[str, str] = {}
         commands = []
+        for path in (str(self.smartctl_path), output_dir):
+            # cmd.exe expande %VAR% y corta en comillas incluso dentro de "..."
+            if any(char in path for char in '%"^!'):
+                raise ValueError(f"Ruta no válida para la consulta elevada: {path!r}")
         for index, (device, device_type) in enumerate(targets):
             device = physical_drive_to_device(device)
             if not _SAFE_DEVICE.match(device) or (device_type and not _SAFE_TYPE.match(device_type)):
@@ -618,7 +622,8 @@ class SmartctlWrapper:
         output_dir = tempfile.mkdtemp(prefix="ordenasion-smart-")
         try:
             command, outputs = self.build_elevated_command(targets, output_dir)
-            comspec = os.environ.get("ComSpec") or "cmd.exe"
+            # Nunca se eleva un ejecutable elegido por variables de entorno
+            comspec = os.path.join(_system_directory(), "cmd.exe")
             launched = _shell_execute_elevated(comspec, f'/d /s /c "{command}"', timeout)
             for device, path in outputs.items():
                 if not launched:
@@ -633,6 +638,17 @@ class SmartctlWrapper:
         finally:
             shutil.rmtree(output_dir, ignore_errors=True)
         return results
+
+
+def _system_directory() -> str:
+    """Carpeta System32 real según la API (no según variables de entorno)."""
+    import ctypes
+
+    buffer = ctypes.create_unicode_buffer(260)
+    length = ctypes.windll.kernel32.GetSystemDirectoryW(buffer, len(buffer))
+    if not length or length >= len(buffer):
+        raise OSError("No se pudo obtener la carpeta del sistema")
+    return buffer.value
 
 
 def _exit_status(stdout: str) -> int:
