@@ -1,531 +1,684 @@
 """
-Wrapper para smartctl.exe - Obtiene datos SMART reales lifetime de los discos
+Wrapper para smartctl: obtiene datos SMART reales (lifetime) de los discos.
+
+Notas importantes:
+- El código de retorno de smartctl es una máscara de bits. Solo los bits 0 y 1
+  impiden interpretar la salida; los bits 2-7 son avisos o señales de salud
+  (bit 3: el disco informa de fallo; 4/5: atributos por debajo del umbral;
+  6: registro de errores; 7: errores en autodiagnósticos).
+- Se usan los campos normalizados del JSON (``temperature.current``,
+  ``power_on_time.hours``, ``power_cycle_count``) y sólo se recurre a los
+  atributos crudos cuando faltan.
+- Todos los procesos se lanzan sin ventana, con UTF-8 y registrados para poder
+  matarlos al cerrar la aplicación (``shutdown``).
 """
-import subprocess
+
+from __future__ import annotations
+
 import json
+import logging
 import os
+import re
+import shutil
+import subprocess
 import sys
-from typing import Optional, Dict, Any, List
+import tempfile
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0
+
+# Bits del código de retorno de smartctl (man smartctl, "RETURN VALUES").
+RC_CMDLINE_ERROR = 1 << 0
+RC_OPEN_FAILED = 1 << 1
+RC_COMMAND_FAILED = 1 << 2
+RC_DISK_FAILING = 1 << 3
+RC_PREFAIL_BELOW_THRESHOLD = 1 << 4
+RC_PAST_BELOW_THRESHOLD = 1 << 5
+RC_ERROR_LOG = 1 << 6
+RC_SELFTEST_ERRORS = 1 << 7
+
+SMART_FLAG_BITS = {
+    "command_failed": RC_COMMAND_FAILED,
+    "failing": RC_DISK_FAILING,
+    "prefail_threshold": RC_PREFAIL_BELOW_THRESHOLD,
+    "past_threshold": RC_PAST_BELOW_THRESHOLD,
+    "error_log": RC_ERROR_LOG,
+    "selftest_errors": RC_SELFTEST_ERRORS,
+}
+
+SMART_FLAG_TEXT = {
+    "failing": "El propio disco informa de fallo inminente (SMART FAILING)",
+    "prefail_threshold": "Hay atributos de prefallo por debajo del umbral",
+    "past_threshold": "Algún atributo estuvo por debajo del umbral en el pasado",
+    "error_log": "El registro de errores del disco contiene entradas",
+    "selftest_errors": "El registro de autodiagnósticos contiene errores",
+}
+
+# Atributos ATA críticos para la integridad de los datos.
+CRITICAL_ATA_ATTRIBUTES = {
+    5: "reallocated_sectors",
+    187: "reported_uncorrect",
+    197: "pending_sectors",
+    198: "uncorrectable_sectors",
+    199: "crc_errors",
+}
+
+_ADMIN_PATTERNS = (
+    "access denied",
+    "access is denied",
+    "permission denied",
+    "administrator",
+    "requires root",
+    "root privilege",
+    "operation not permitted",
+    "acceso denegado",
+)
+
+_SAFE_DEVICE = re.compile(r"^/dev/[A-Za-z0-9,]+$")
+_SAFE_TYPE = re.compile(r"^[A-Za-z0-9,+_-]+$")
+_FIRST_INT = re.compile(r"-?\d+")
+
+
+def is_user_admin() -> bool:
+    """True si el proceso tiene privilegios de administrador (o root)."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except (AttributeError, OSError):
+            return False
+    geteuid = getattr(os, "geteuid", None)
+    return bool(geteuid and geteuid() == 0)
+
+
+def decode_smart_flags(returncode: Optional[int]) -> Dict[str, bool]:
+    """Traduce los bits 2-7 del código de retorno a señales con nombre."""
+    rc = int(returncode or 0)
+    return {name: bool(rc & bit) for name, bit in SMART_FLAG_BITS.items()}
+
+
+def physical_drive_to_device(physical_drive: str) -> str:
+    """'PHYSICALDRIVE3' -> '/dev/pd3'; rutas /dev/... se devuelven tal cual."""
+    text = (physical_drive or "").strip()
+    upper = text.upper()
+    if "PHYSICALDRIVE" in upper:
+        number = upper.split("PHYSICALDRIVE", 1)[1].strip()
+        return f"/dev/pd{number}"
+    return text
+
+
+def device_to_physical_index(device: str) -> Optional[int]:
+    """Índice de disco físico de Windows para /dev/pdN y /dev/sdX (sda = 0).
+
+    /dev/nvmeN y /dev/csmiX,Y no corresponden a un número de disco físico, por
+    lo que devuelven None.
+    """
+    match = re.fullmatch(r"/dev/pd(\d+)", device or "")
+    if match:
+        return int(match.group(1))
+    match = re.fullmatch(r"/dev/sd([a-z]{1,2})", device or "")
+    if match:
+        letters = match.group(1)
+        if len(letters) == 1:
+            return ord(letters) - ord("a")
+        return (ord(letters[0]) - ord("a") + 1) * 26 + ord(letters[1]) - ord("a")
+    return None
+
+
+def parse_scan_output(stdout: str) -> List[Dict[str, Any]]:
+    """Parsea ``smartctl --scan`` (formatos /dev/sda -d ata, /dev/nvme0 -d nvme,
+    /dev/csmi0,1 -d ata, /dev/pd0 ...), conservando el tipo ``-d``."""
+    disks = []
+    for line in (stdout or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split("#", 1)[0].split()
+        if not parts or not parts[0].startswith("/dev/"):
+            continue
+        device = parts[0]
+        device_type = None
+        if "-d" in parts:
+            index = parts.index("-d")
+            if index + 1 < len(parts):
+                device_type = parts[index + 1]
+        physical_index = device_to_physical_index(device)
+        disks.append({
+            "device": device,
+            "type": device_type,
+            "physical_index": physical_index,
+            "physical_drive": f"PHYSICALDRIVE{physical_index}" if physical_index is not None else None,
+            "raw_line": stripped,
+        })
+    return disks
+
+
+def _raw_int(attribute: Dict[str, Any]) -> Optional[int]:
+    raw = attribute.get("raw") or {}
+    value = raw.get("value")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
+
+
+def _raw_string_int(attribute: Dict[str, Any]) -> Optional[int]:
+    text = (attribute.get("raw") or {}).get("string")
+    if not isinstance(text, str):
+        return None
+    match = _FIRST_INT.search(text)
+    return int(match.group()) if match else None
+
+
+def decode_temperature_raw(attribute: Dict[str, Any]) -> Optional[int]:
+    """Temperatura del atributo 194: el raw suele venir empaquetado (min/max)."""
+    from_string = _raw_string_int(attribute)
+    if from_string is not None and -40 <= from_string <= 150:
+        return from_string
+    raw = _raw_int(attribute)
+    if raw is None:
+        return None
+    for mask in (0xFFFF, 0xFF):
+        value = raw & mask
+        if 0 < value <= 150:
+            return value
+    return None
+
+
+def decode_power_on_hours_raw(attribute: Dict[str, Any]) -> Optional[int]:
+    """Horas del atributo 9. Seagate empaqueta milisegundos en los bits altos."""
+    raw = _raw_int(attribute)
+    if raw is None:
+        return None
+    name = (attribute.get("name") or "").lower()
+    value = raw & 0xFFFFFFFF
+    if "half_minutes" in name:
+        return value // 120
+    if "minutes" in name:
+        return value // 60
+    if "seconds" in name:
+        return value // 3600
+    return value
+
+
+def lba_unit_bytes(name: str, logical_block_size: int = 512) -> Optional[int]:
+    """Bytes por unidad de los atributos 241/242/246 según su nombre."""
+    lowered = (name or "").lower()
+    if "32mib" in lowered:
+        return 32 * 1024 ** 2
+    if "gib" in lowered or lowered.endswith("_gb") or "_gb_" in lowered:
+        return 1024 ** 3
+    if "mib" in lowered or lowered.endswith("_mb"):
+        return 1024 ** 2
+    if "lba" in lowered or "sectors" in lowered:
+        return max(512, int(logical_block_size or 512))
+    return None
+
+
+@dataclass
+class SmartQuery:
+    """Resultado de una consulta a smartctl."""
+
+    device: str
+    returncode: Optional[int] = None
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None  # admin_required | open_failed | timeout | parse_error | unavailable | cancelled | cmdline
+    messages: List[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return self.data is not None
+
+    @property
+    def admin_required(self) -> bool:
+        return self.error == "admin_required"
 
 
 class SmartctlWrapper:
-    """Wrapper para interactuar con smartctl.exe"""
-    
-    def __init__(self):
-        """Inicializa el wrapper y localiza smartctl.exe"""
-        self.smartctl_path = self._find_smartctl()
-    
-    def _log(self, message: str) -> None:
-        """Imprime mensajes con emojis de forma segura en Windows."""
-        from .logger import _safe_print
-        _safe_print(message)
-        
+    """Wrapper para interactuar con smartctl."""
+
+    def __init__(self, smartctl_path: Optional[str] = None):
+        self._processes: set = set()
+        self._process_lock = threading.Lock()
+        self._closed = False
+        self.smartctl_path = smartctl_path or self._find_smartctl()
+
+    # ------------------------------------------------------------------ setup
     def _find_smartctl(self) -> Optional[str]:
-        """Encuentra la ruta a smartctl.exe"""
-        # Opción 1: En la carpeta bin/ del proyecto
-        if getattr(sys, 'frozen', False):
-            # Si estamos en un .exe compilado
-            base_path = Path(sys._MEIPASS)
+        """Busca smartctl en bin/ del proyecto (o del ejecutable) y en el PATH."""
+        if getattr(sys, "frozen", False):
+            base_path = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
         else:
-            # Si estamos en desarrollo
-            base_path = Path(__file__).parent.parent.parent
-        
-        smartctl_bin = base_path / "bin" / "smartctl.exe"
-        if smartctl_bin.exists():
-            self._log(f"✅ smartctl.exe encontrado en: {smartctl_bin}")
-            return str(smartctl_bin)
-        
-        # Opción 2: En el PATH del sistema
-        try:
-            result = subprocess.run(
-                ["where", "smartctl.exe"],
-                capture_output=True,
-                text=True,
-                timeout=2
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                path = result.stdout.strip().split('\n')[0]
-                self._log(f"✅ smartctl.exe encontrado en PATH: {path}")
-                return path
-        except Exception:
-            pass
-        
-        self._log("⚠️ smartctl.exe no encontrado. Coloca smartctl.exe en la carpeta bin/")
+            base_path = Path(__file__).resolve().parent.parent.parent
+        names = ("smartctl.exe",) if sys.platform == "win32" else ("smartctl", "smartctl.exe")
+        for name in names:
+            candidate = base_path / "bin" / name
+            if candidate.is_file() and (sys.platform == "win32" or name == "smartctl"):
+                logger.info("smartctl encontrado en %s", candidate)
+                return str(candidate)
+        for name in names:
+            found = shutil.which(name)
+            if found:
+                logger.info("smartctl encontrado en PATH: %s", found)
+                return found
+        logger.warning("smartctl no encontrado. Coloca smartctl.exe en la carpeta bin/")
         return None
-    
+
     def is_available(self) -> bool:
-        """Verifica si smartctl está disponible"""
-        return self.smartctl_path is not None
-    
-    def get_disk_smart_data(self, physical_drive: str, timeout: int = 10, max_retries: int = 2, device_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """
-        Obtiene datos SMART reales de un disco físico con reintentos y timeout configurable
-        
-        Args:
-            physical_drive: ID del disco físico (ej: "PHYSICALDRIVE0" o "/dev/nvme0")
-            timeout: Timeout en segundos para la ejecución de smartctl
-            max_retries: Número máximo de reintentos con backoff exponencial
-        
-        Returns:
-            Diccionario con datos SMART o None si hay error
-        """
+        return self.smartctl_path is not None and not self._closed
+
+    # ------------------------------------------------------------- procesos
+    def _run(self, args: List[str], timeout: float) -> Tuple[int, str, str]:
+        """Ejecuta smartctl registrando el proceso para poder matarlo al cerrar."""
+        if self._closed:
+            raise RuntimeError("smartctl cerrado")
+        process = subprocess.Popen(
+            [self.smartctl_path, *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=CREATE_NO_WINDOW,
+        )
+        with self._process_lock:
+            self._processes.add(process)
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            return process.returncode, stdout or "", stderr or ""
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise
+        finally:
+            with self._process_lock:
+                self._processes.discard(process)
+
+    def shutdown(self) -> None:
+        """Mata los smartctl en curso e impide lanzar más (idempotente)."""
+        self._closed = True
+        with self._process_lock:
+            processes = list(self._processes)
+            self._processes.clear()
+        for process in processes:
+            try:
+                if process.poll() is None:
+                    process.kill()
+            except OSError as exc:
+                logger.debug("No se pudo terminar smartctl: %s", exc)
+
+    # ------------------------------------------------------------ consultas
+    def query(self, physical_drive: str, timeout: float = 10, device_type: Optional[str] = None,
+              max_retries: int = 1) -> SmartQuery:
+        """Consulta SMART completa (-a -j) con diagnóstico del error."""
+        device = physical_drive_to_device(physical_drive)
+        query = SmartQuery(device=device)
         if not self.is_available():
-            return None
-        
-        # Convertir formato de disco físico a formato que smartctl entiende en Windows
-        # Intentar múltiples formatos para compatibilidad
-        device = None
-        if 'PHYSICALDRIVE' in physical_drive:
-            drive_num = physical_drive.replace('PHYSICALDRIVE', '').strip()
-            # Formato estándar para Windows: /dev/pdX
-            device = f"/dev/pd{drive_num}"
-        elif physical_drive.startswith('/dev/'):
-            # Ya está en formato correcto
-            device = physical_drive
-        else:
-            # Intentar como está
-            device = physical_drive
-        
-        if not device:
-            self._log(f"⚠️ No se pudo determinar formato de dispositivo para {physical_drive}")
-            return None
-        
+            query.error = "unavailable"
+            return query
+        args = ["-a", "-j"]
+        if device_type:
+            args += ["-d", device_type]
+        args.append(device)
         for attempt in range(max_retries + 1):
             try:
-                # Ejecutar smartctl con salida JSON
-                # -a: toda la información SMART
-                # -j: salida en formato JSON
-                # -d: especificar tipo de dispositivo si se conoce (sat, nvme, etc.)
-                cmd = [self.smartctl_path, "-a", "-j"]
-                if device_type:
-                    cmd.extend(["-d", device_type])
-                cmd.append(device)
-                
-                # Aumentar timeout progresivamente en reintentos
-                current_timeout = timeout + (attempt * 5)
-                
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=current_timeout,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-                )
-                
-                # Códigos de retorno de smartctl:
-                # 0 = OK
-                # 1 = Error de línea de comandos
-                # 2 = Error al abrir dispositivo
-                # 4 = OK con warnings (datos válidos)
-                # 64 = Error de sintaxis
-                # 128 = Error fatal
-                if result.returncode in [0, 4]:  # 0 = OK, 4 = OK con warnings
-                    try:
-                        # Verificar que stdout no esté vacío
-                        if not result.stdout or not result.stdout.strip():
-                            self._log(f"⚠️ smartctl no devolvió datos para {device}")
-                            if attempt < max_retries:
-                                continue
-                            return None
-                        
-                        data = json.loads(result.stdout)
-                        
-                        # Verificar que sea un diccionario válido
-                        if not isinstance(data, dict):
-                            self._log(f"⚠️ smartctl devolvió datos en formato incorrecto para {device}")
-                            if attempt < max_retries:
-                                continue
-                            return None
-                        
-                        parsed_data = self._parse_smart_json(data)
-                        
-                        # Validar que los datos parseados sean válidos
-                        if self._validate_smart_data(parsed_data):
-                            if attempt > 0:
-                                self._log(f"✅ smartctl exitoso en intento {attempt + 1} para {device}")
-                            return parsed_data
-                        else:
-                            self._log(f"⚠️ Datos SMART inválidos para {device}")
-                            if attempt < max_retries:
-                                continue
-                            return None
-                            
-                    except json.JSONDecodeError as e:
-                        self._log(f"⚠️ Error parseando JSON de smartctl para {device}: {e}")
-                        # Si hay salida, puede ser un mensaje de error en texto
-                        if result.stderr:
-                            self._log(f"  stderr: {result.stderr[:200]}")
-                        if attempt < max_retries:
-                            continue
-                        return None
-                elif result.returncode == 2:
-                    # Error al abrir dispositivo - puede ser permisos o dispositivo no existe
-                    error_msg = result.stderr.strip() if result.stderr else "Error desconocido"
-                    if "Permission denied" in error_msg or "Access denied" in error_msg:
-                        self._log(f"⚠️ Permisos insuficientes para acceder a {device}. Ejecuta como administrador.")
-                    else:
-                        self._log(f"⚠️ No se pudo abrir dispositivo {device}: {error_msg[:100]}")
-                    # No reintentar si es un error de permisos
-                    return None
-                else:
-                    error_msg = result.stderr.strip() if result.stderr else f"Código {result.returncode}"
-                    self._log(f"⚠️ smartctl retornó código {result.returncode} para {device}: {error_msg[:100]}")
-                    if attempt < max_retries:
-                        continue
-                    return None
-                    
+                rc, stdout, stderr = self._run(args, timeout + attempt * 5)
             except subprocess.TimeoutExpired:
-                self._log(f"⚠️ Timeout ({current_timeout}s) ejecutando smartctl para {physical_drive} (intento {attempt + 1})")
-                if attempt < max_retries:
-                    # Backoff exponencial: esperar 1s, 2s, 4s...
-                    import time
-                    time.sleep(2 ** attempt)
-                    continue
-                return None
-            except Exception as e:
-                self._log(f"❌ Error ejecutando smartctl: {e}")
-                if attempt < max_retries:
-                    import time
-                    time.sleep(2 ** attempt)
-                    continue
-                return None
-        
-        return None
-    
+                logger.warning("Timeout ejecutando smartctl para %s (intento %d)", device, attempt + 1)
+                query.error = "timeout"
+                continue
+            except (OSError, RuntimeError) as exc:
+                query.error = "cancelled" if self._closed else "unavailable"
+                logger.warning("No se pudo ejecutar smartctl: %s", exc)
+                return query
+            return self.interpret_output(device, rc, stdout, stderr)
+        return query
+
+    def interpret_output(self, device: str, returncode: int, stdout: str, stderr: str = "") -> SmartQuery:
+        """Convierte la salida de smartctl en un SmartQuery (sin ejecutar nada)."""
+        query = SmartQuery(device=device, returncode=returncode)
+        raw = None
+        if stdout and stdout.strip():
+            try:
+                raw = json.loads(stdout)
+            except json.JSONDecodeError:
+                raw = None
+        if isinstance(raw, dict):
+            query.messages = [
+                str(message.get("string", ""))
+                for message in (raw.get("smartctl") or {}).get("messages", [])
+                if isinstance(message, dict)
+            ]
+        text = " ".join(query.messages + [stderr or ""]).lower()
+        if returncode & RC_CMDLINE_ERROR:
+            query.error = "cmdline"
+            return query
+        if returncode & RC_OPEN_FAILED:
+            needs_admin = any(pattern in text for pattern in _ADMIN_PATTERNS)
+            if not needs_admin and not text.strip() and not is_user_admin():
+                needs_admin = sys.platform == "win32"
+            query.error = "admin_required" if needs_admin else "open_failed"
+            return query
+        if not isinstance(raw, dict):
+            query.error = "parse_error"
+            return query
+        parsed = self._parse_smart_json(raw)
+        parsed["smart_flags"] = decode_smart_flags(returncode)
+        parsed["smartctl_returncode"] = returncode
+        parsed["smartctl_messages"] = query.messages
+        self._sanitize(parsed)
+        query.data = parsed
+        return query
+
+    def get_disk_smart_data(self, physical_drive: str, timeout: int = 10, max_retries: int = 1,
+                            device_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Compatibilidad: datos SMART parseados o None."""
+        return self.query(physical_drive, timeout=timeout, device_type=device_type,
+                          max_retries=max_retries).data
+
+    # --------------------------------------------------------------- parseo
     def _parse_smart_json(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Parsea la salida JSON de smartctl y extrae datos relevantes
-        
-        Args:
-            data: Diccionario JSON de smartctl
-            
-        Returns:
-            Diccionario con datos procesados
-        """
-        result = {
-            'disk_model': data.get('model_name', 'Desconocido'),
-            'serial_number': data.get('serial_number', 'N/A'),
-            'firmware': data.get('firmware_version', 'N/A'),
-            'smart_status': data.get('smart_status', {}).get('passed', False),
-            'device_type': None,
-            'temperature': None,
-            'power_on_hours': None,
-            'power_cycles': None,
-            'read_bytes': None,
-            'write_bytes': None,
-            'read_count': None,
-            'write_count': None,
-            'health_percentage': 100
+        """Extrae los datos relevantes del JSON de smartctl."""
+        smart_status = data.get("smart_status")
+        passed = smart_status.get("passed") if isinstance(smart_status, dict) else None
+        result: Dict[str, Any] = {
+            "disk_model": data.get("model_name") or data.get("model_family") or "Desconocido",
+            "serial_number": data.get("serial_number", "N/A"),
+            "firmware": data.get("firmware_version", "N/A"),
+            # Sin smart_status (puentes USB, RAID) el estado es desconocido, no fallo.
+            "smart_status": passed if isinstance(passed, bool) else None,
+            "device_type": None,
+            "media_label": None,
+            "temperature": None,
+            "power_on_hours": None,
+            "power_cycles": None,
+            "read_bytes": None,
+            "write_bytes": None,
+            "read_count": None,
+            "write_count": None,
+            "health_percentage": None,
+            "critical_attributes": {},
+            "failing_attributes": [],
         }
-        
-        self._log(f"📋 Parseando datos SMART de: {result['disk_model']}")
-        
-        # Para discos NVMe, la estructura es diferente (PRIORITARIO)
-        if 'nvme_smart_health_information_log' in data:
-            nvme_log = data['nvme_smart_health_information_log']
-            result['device_type'] = 'nvme'
-            
-            # La temperatura puede venir en diferentes formatos
-            temp_value = nvme_log.get('temperature', None)
-            if temp_value is not None:
-                # Si es un diccionario, puede tener 'value' o 'current'
-                if isinstance(temp_value, dict):
-                    temp_value = temp_value.get('value') or temp_value.get('current') or temp_value.get('temperature')
-                # Convertir de Kelvin a Celsius si es necesario (temperaturas > 200 probablemente están en Kelvin)
-                if isinstance(temp_value, (int, float)):
-                    if temp_value > 200:  # Probablemente en Kelvin
-                        temp_value = temp_value - 273.15
-                    result['temperature'] = int(temp_value) if temp_value else None
-                else:
-                    result['temperature'] = None
-            else:
-                result['temperature'] = None
-            result['power_on_hours'] = nvme_log.get('power_on_hours', None)
-            result['power_cycles'] = nvme_log.get('power_cycles', None)
-            
-            # Datos de lectura/escritura en unidades de 1000 bloques de 512 bytes
-            data_units_read = nvme_log.get('data_units_read', 0)
-            data_units_written = nvme_log.get('data_units_written', 0)
-            
-            self._log(f"  📊 NVMe - data_units_read: {data_units_read:,}, data_units_written: {data_units_written:,}")
-            
-            # Convertir a bytes (cada unidad = 1000 bloques de 512 bytes = 512,000 bytes)
-            result['read_bytes'] = data_units_read * 512000
-            result['write_bytes'] = data_units_written * 512000
-            
-            # Calcular contadores de operaciones (estimado: promedio 64KB por operación)
-            avg_op_size = 64 * 1024
-            result['read_count'] = result['read_bytes'] // avg_op_size if result['read_bytes'] > 0 else 0
-            result['write_count'] = result['write_bytes'] // avg_op_size if result['write_bytes'] > 0 else 0
-            
-            # Porcentaje de vida útil disponible
-            available_spare = nvme_log.get('available_spare', 100)
-            result['health_percentage'] = available_spare
-            
-            self._log(f"  ✅ NVMe parsed: {result['read_bytes']/1024**4:.1f} TB leídos, Temp: {result['temperature']}°C, Horas: {result['power_on_hours']:,}")
-        
-        # Obtener atributos SMART para discos SATA/ATA
-        elif 'ata_smart_attributes' in data:
-            smart_attrs = data.get('ata_smart_attributes', {}).get('table', [])
-            result['device_type'] = 'ata'
-            self._log(f"  📊 Disco SATA/ATA con {len(smart_attrs)} atributos SMART")
-            
-            for attr in smart_attrs:
-                attr_id = attr.get('id', 0)
-                attr_name = attr.get('name', '')
-                raw_value = attr.get('raw', {}).get('value', 0)
-                
-                # ID 9: Power On Hours
-                if attr_id == 9 or 'Power_On_Hours' in attr_name:
-                    result['power_on_hours'] = raw_value
-                    self._log(f"    ⏰ Power On Hours: {raw_value:,} horas")
-                
-                # ID 12: Power Cycle Count
-                elif attr_id == 12 or 'Power_Cycle' in attr_name:
-                    result['power_cycles'] = raw_value
-                    self._log(f"    🔄 Power Cycles: {raw_value:,}")
-                
-                # ID 194: Temperature
-                elif attr_id == 194 or 'Temperature' in attr_name:
-                    result['temperature'] = raw_value
-                    self._log(f"    🌡️ Temperature: {raw_value}°C")
-                
-                # ID 241: Total LBAs Written (SSDs SATA - en unidades de 32MiB típicamente)
-                elif attr_id == 241:
-                    # La mayoría de SSDs SATA reportan en unidades de 32MiB (33,554,432 bytes)
-                    result['write_bytes'] = raw_value * 32 * 1024 * 1024  # 32 MiB
-                    self._log(f"    ✍️ Total LBAs Written: {raw_value:,} unidades ({result['write_bytes']/1024**4:.2f} TB)")
-                
-                # ID 242: Total LBAs Read (SSDs SATA - en unidades de 32MiB típicamente)
-                elif attr_id == 242:
-                    result['read_bytes'] = raw_value * 32 * 1024 * 1024  # 32 MiB
-                    self._log(f"    📖 Total LBAs Read: {raw_value:,} unidades ({result['read_bytes']/1024**4:.2f} TB)")
-            
-            # Calcular contadores de operaciones para SATA si tenemos datos
-            if result['read_bytes'] is not None and result['write_bytes'] is not None:
-                avg_op_size = 64 * 1024
-                result['read_count'] = result['read_bytes'] // avg_op_size if result['read_bytes'] > 0 else 0
-                result['write_count'] = result['write_bytes'] // avg_op_size if result['write_bytes'] > 0 else 0
-                self._log(f"  ✅ SATA parsed: Temp: {result['temperature']}°C, Horas: {result['power_on_hours']:,}, Ciclos: {result['power_cycles']:,}")
-            
-            # Si no encontramos los atributos 241/242, el disco podría no reportarlos
-            if result['read_bytes'] is None and result['write_bytes'] is None:
-                self._log(f"  ⚠️ Disco SATA no reporta atributos de lectura/escritura (241/242)")
+
+        temperature = data.get("temperature")
+        if isinstance(temperature, dict) and isinstance(temperature.get("current"), (int, float)):
+            result["temperature"] = int(temperature["current"])
+        power_on = data.get("power_on_time")
+        if isinstance(power_on, dict) and isinstance(power_on.get("hours"), (int, float)):
+            result["power_on_hours"] = int(power_on["hours"])
+        if isinstance(data.get("power_cycle_count"), (int, float)):
+            result["power_cycles"] = int(data["power_cycle_count"])
+
+        protocol = ((data.get("device") or {}).get("protocol") or "").lower()
+        if "nvme_smart_health_information_log" in data or protocol == "nvme":
+            self._parse_nvme(data, result)
+        elif "ata_smart_attributes" in data or protocol == "ata":
+            self._parse_ata(data, result)
         else:
-            self._log(f"  ⚠️ Estructura SMART desconocida - ni NVMe ni ATA")
-        
+            logger.debug("Estructura SMART desconocida para %s", result["disk_model"])
         return result
-    
-    def _validate_smart_data(self, data: Dict[str, Any]) -> bool:
-        """
-        Valida que los datos SMART parseados sean coherentes y válidos
-        
-        Args:
-            data: Diccionario con datos SMART parseados
-            
-        Returns:
-            True si los datos son válidos, False en caso contrario
-        """
-        if not data or not isinstance(data, dict):
-            return False
-        
-        # Verificar que al menos tengamos información básica del disco
-        if not data.get('disk_model') or data.get('disk_model') == 'Desconocido':
-            return False
-        
-        # Validar temperatura si está presente
-        temp = data.get('temperature')
-        if temp is not None:
-            if not isinstance(temp, (int, float)) or temp < -50 or temp > 150:
-                return False
-        
-        # Validar horas de encendido si está presente
-        hours = data.get('power_on_hours')
-        if hours is not None:
-            if not isinstance(hours, (int, float)) or hours < 0 or hours > 1000000:
-                return False
-        
-        # Validar ciclos de encendido si está presente
-        cycles = data.get('power_cycles')
-        if cycles is not None:
-            if not isinstance(cycles, (int, float)) or cycles < 0 or cycles > 100000:
-                return False
-        
-        # Validar bytes de lectura/escritura si están presentes
-        read_bytes = data.get('read_bytes')
-        write_bytes = data.get('write_bytes')
-        
-        if read_bytes is not None:
-            if not isinstance(read_bytes, (int, float)) or read_bytes < 0:
-                return False
-        
-        if write_bytes is not None:
-            if not isinstance(write_bytes, (int, float)) or write_bytes < 0:
-                return False
-        
-        # Si tenemos ambos bytes, verificar que no sean sospechosamente pequeños
-        # Nota: Algunos discos nuevos o con poco uso pueden tener valores bajos, pero válidos
-        # Solo rechazar si ambos son exactamente 0 (lo cual es sospechoso)
-        if read_bytes is not None and write_bytes is not None:
-            # Si ambos son 0, puede ser un disco nuevo o que no reporta estos atributos
-            # Esto es válido para algunos HDDs que no reportan atributos 241/242
-            if read_bytes == 0 and write_bytes == 0:
-                # Permitir si es un HDD (puede no reportar estos atributos)
-                # Rechazar solo si parece ser un SSD que debería reportarlos
-                pass  # No rechazar automáticamente, dejar que el código que llama decida
-        
-        # Validar porcentaje de salud si está presente
-        health = data.get('health_percentage')
-        if health is not None:
-            if not isinstance(health, (int, float)) or health < 0 or health > 100:
-                return False
-        
-        return True
-    
-    def scan_all_disks(self) -> List[Dict[str, Any]]:
-        """
-        Escanea todos los discos disponibles usando smartctl --scan (método profesional)
-        
-        Returns:
-            Lista de diccionarios con información de cada disco detectado
-            [{"device": "/dev/pd0", "type": "sat", "physical_drive": "PHYSICALDRIVE0"}, ...]
-        """
-        if not self.is_available():
-            return []
-        
-        disks = []
-        
-        try:
-            # Método 1: Usar smartctl --scan (método profesional recomendado)
-            # Esto lista automáticamente todos los discos con su tipo
-            cmd = [self.smartctl_path, "--scan"]
-            
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-            
-            if result.returncode == 0 and result.stdout:
-                # Parsear salida de --scan
-                # Formato típico: /dev/pd0 -d sat # /dev/pd0, ATA device
-                for line in result.stdout.strip().split('\n'):
-                    if line.strip() and not line.strip().startswith('#'):
-                        parts = line.split('#')[0].strip().split()
-                        if parts:
-                            device = parts[0]
-                            device_type = None
-                            if '-d' in parts:
-                                idx = parts.index('-d')
-                                if idx + 1 < len(parts):
-                                    device_type = parts[idx + 1]
-                            
-                            # Extraer número de disco físico
-                            if '/dev/pd' in device:
-                                drive_num = device.replace('/dev/pd', '').strip()
-                                physical_drive = f"PHYSICALDRIVE{drive_num}"
-                                
-                                disk_info = {
-                                    'device': device,
-                                    'physical_drive': physical_drive,
-                                    'type': device_type,
-                                    'raw_line': line
-                                }
-                                disks.append(disk_info)
-                                self._log(f"✅ Disco detectado: {physical_drive} -> {device} (tipo: {device_type or 'auto'})")
-            
-            # Si --scan no funcionó, usar método de escaneo manual
-            if not disks:
-                self._log("⚠️ smartctl --scan no devolvió resultados, usando escaneo manual...")
-                for i in range(10):
-                    device = f"/dev/pd{i}"
-                    cmd = [self.smartctl_path, "-i", device]
-                    
-                    try:
-                        result = subprocess.run(
-                            cmd,
-                            capture_output=True,
-                            text=True,
-                            timeout=2,
-                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-                        )
-                        
-                        if result.returncode in [0, 4]:
-                            disk_info = {
-                                'device': device,
-                                'physical_drive': f"PHYSICALDRIVE{i}",
-                                'type': None,
-                                'raw_line': ''
-                            }
-                            disks.append(disk_info)
-                            self._log(f"✅ Disco detectado (manual): PHYSICALDRIVE{i} -> {device}")
-                    except subprocess.TimeoutExpired:
-                        continue
-                    except Exception:
-                        continue
-            
-            return disks
-            
-        except Exception as e:
-            from .logger import error
-            error(f"Error escaneando discos: {e}")
-            return []
-    
-    def get_disk_info_quick(self, physical_drive: str) -> Optional[Dict[str, Any]]:
-        """
-        Obtiene información básica del disco (modelo, número de serie) sin datos SMART completos
-        Útil para mapeo rápido de unidades
-        
-        Args:
-            physical_drive: ID del disco físico (ej: "PHYSICALDRIVE0")
-        
-        Returns:
-            Diccionario con información básica o None
-        """
-        if not self.is_available():
-            return None
-        
-        # Convertir formato de disco físico
-        device = None
-        if 'PHYSICALDRIVE' in physical_drive:
-            drive_num = physical_drive.replace('PHYSICALDRIVE', '').strip()
-            device = f"/dev/pd{drive_num}"
-        elif physical_drive.startswith('/dev/'):
-            device = physical_drive
+
+    def _parse_nvme(self, data: Dict[str, Any], result: Dict[str, Any]) -> None:
+        log = data.get("nvme_smart_health_information_log") or {}
+        result["device_type"] = "nvme"
+        result["media_label"] = "SSD NVMe"
+        if result["temperature"] is None:
+            temp_value = log.get("temperature")
+            if isinstance(temp_value, dict):
+                temp_value = temp_value.get("current") or temp_value.get("value")
+            if isinstance(temp_value, (int, float)):
+                if temp_value > 200:  # Kelvin
+                    temp_value -= 273
+                result["temperature"] = int(temp_value)
+        if result["power_on_hours"] is None and isinstance(log.get("power_on_hours"), (int, float)):
+            result["power_on_hours"] = int(log["power_on_hours"])
+        if result["power_cycles"] is None and isinstance(log.get("power_cycles"), (int, float)):
+            result["power_cycles"] = int(log["power_cycles"])
+        # Unidades de 1000 bloques de 512 bytes.
+        units_read = log.get("data_units_read")
+        units_written = log.get("data_units_written")
+        if isinstance(units_read, (int, float)):
+            result["read_bytes"] = int(units_read) * 512000
+        if isinstance(units_written, (int, float)):
+            result["write_bytes"] = int(units_written) * 512000
+        if isinstance(log.get("host_reads"), (int, float)):
+            result["read_count"] = int(log["host_reads"])
+        if isinstance(log.get("host_writes"), (int, float)):
+            result["write_count"] = int(log["host_writes"])
+        percentage_used = log.get("percentage_used")
+        if isinstance(percentage_used, (int, float)):
+            result["health_percentage"] = max(0, min(100, 100 - int(percentage_used)))
+        critical = {}
+        for key in ("critical_warning", "media_errors", "percentage_used", "available_spare",
+                    "available_spare_threshold", "num_err_log_entries", "unsafe_shutdowns"):
+            if isinstance(log.get(key), (int, float)):
+                critical[key] = int(log[key])
+        result["critical_attributes"] = critical
+        for key in ("critical_warning", "media_errors", "percentage_used", "available_spare"):
+            if key in critical:
+                result[key] = critical[key]
+
+    def _parse_ata(self, data: Dict[str, Any], result: Dict[str, Any]) -> None:
+        table = (data.get("ata_smart_attributes") or {}).get("table") or []
+        rotation = data.get("rotation_rate")
+        if isinstance(rotation, (int, float)) and rotation > 0:
+            result["device_type"] = "hdd"
+            result["media_label"] = "HDD"
         else:
-            device = physical_drive
-        
-        if not device:
-            return None
-        
+            result["device_type"] = "ata"
+            result["media_label"] = "SSD SATA" if rotation == 0 else "Disco SATA"
+        block_size = data.get("logical_block_size") or 512
+        critical: Dict[int, Dict[str, Any]] = {}
+        for attribute in table:
+            if not isinstance(attribute, dict):
+                continue
+            attr_id = attribute.get("id")
+            name = attribute.get("name") or ""
+            when_failed = attribute.get("when_failed") or ""
+            if when_failed:
+                result["failing_attributes"].append({"id": attr_id, "name": name, "when_failed": when_failed})
+            if attr_id == 9 and result["power_on_hours"] is None:
+                result["power_on_hours"] = decode_power_on_hours_raw(attribute)
+            elif attr_id == 12 and result["power_cycles"] is None:
+                raw = _raw_int(attribute)
+                result["power_cycles"] = raw & 0xFFFFFFFF if raw is not None else None
+            elif attr_id == 194 and result["temperature"] is None:
+                # 190 (Airflow) no es la temperatura del disco: sólo 194.
+                result["temperature"] = decode_temperature_raw(attribute)
+            elif attr_id in (241, 242):
+                raw = _raw_int(attribute)
+                unit = lba_unit_bytes(name, block_size)
+                if raw is not None and unit:
+                    result["write_bytes" if attr_id == 241 else "read_bytes"] = raw * unit
+                elif raw is not None:
+                    logger.debug("Unidad desconocida para el atributo %s (%s)", attr_id, name)
+            if attr_id in CRITICAL_ATA_ATTRIBUTES:
+                raw = _raw_int(attribute)
+                if raw is not None:
+                    raw &= 0xFFFFFFFFFFFF
+                critical[attr_id] = {
+                    "name": name,
+                    "value": attribute.get("value"),
+                    "worst": attribute.get("worst"),
+                    "thresh": attribute.get("thresh"),
+                    "raw": raw,
+                    "when_failed": when_failed,
+                }
+                result[CRITICAL_ATA_ATTRIBUTES[attr_id]] = raw
+        result["critical_attributes"] = critical
+
+    @staticmethod
+    def _sanitize(data: Dict[str, Any]) -> None:
+        """Anula campos imposibles en lugar de descartar el disco entero."""
+        limits = {
+            "temperature": (-40, 150),
+            "power_on_hours": (0, 1_000_000),
+            "power_cycles": (0, 10_000_000),
+            "health_percentage": (0, 100),
+        }
+        for key, (low, high) in limits.items():
+            value = data.get(key)
+            if value is not None and (not isinstance(value, (int, float)) or not low <= value <= high):
+                data[key] = None
+        for key in ("read_bytes", "write_bytes", "read_count", "write_count"):
+            value = data.get(key)
+            if value is not None and (not isinstance(value, (int, float)) or value < 0):
+                data[key] = None
+
+    def _validate_smart_data(self, data: Dict[str, Any]) -> bool:
+        """True si hay algún dato útil (los campos imposibles ya se anularon)."""
+        if not isinstance(data, dict):
+            return False
+        return any(data.get(key) is not None for key in (
+            "temperature", "power_on_hours", "power_cycles", "smart_status",
+            "read_bytes", "write_bytes", "health_percentage"))
+
+    # ------------------------------------------------------------- escaneo
+    def scan_all_disks(self) -> List[Dict[str, Any]]:
+        """Lista los dispositivos de ``smartctl --scan`` con su tipo ``-d``."""
+        if not self.is_available():
+            return []
         try:
-            # Usar -i para información básica (más rápido que -a)
-            cmd = [self.smartctl_path, "-i", "-j", device]
-            
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=3,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-            
-            if result.returncode in [0, 4] and result.stdout:
+            rc, stdout, _stderr = self._run(["--scan"], timeout=10)
+        except (subprocess.TimeoutExpired, OSError, RuntimeError) as exc:
+            logger.warning("smartctl --scan falló: %s", exc)
+            return []
+        if rc & (RC_CMDLINE_ERROR | RC_OPEN_FAILED):
+            return []
+        return parse_scan_output(stdout)
+
+    def get_disk_info_quick(self, physical_drive: str, device_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Información básica (-i) sin datos SMART completos."""
+        if not self.is_available():
+            return None
+        device = physical_drive_to_device(physical_drive)
+        args = ["-i", "-j"] + (["-d", device_type] if device_type else []) + [device]
+        try:
+            rc, stdout, _ = self._run(args, timeout=5)
+        except (subprocess.TimeoutExpired, OSError, RuntimeError):
+            return None
+        if rc & (RC_CMDLINE_ERROR | RC_OPEN_FAILED) or not stdout:
+            return None
+        try:
+            data = json.loads(stdout)
+        except json.JSONDecodeError:
+            return None
+        capacity = (data.get("user_capacity") or {}).get("bytes")
+        return {
+            "model_name": data.get("model_name", "Desconocido"),
+            "serial_number": data.get("serial_number", "N/A"),
+            "size": int(capacity) if isinstance(capacity, (int, float)) else 0,
+            "device": device,
+            "physical_drive": physical_drive,
+        }
+
+    # ------------------------------------------------- consulta elevada (UAC)
+    def build_elevated_command(self, targets: Iterable[Tuple[str, Optional[str]]],
+                               output_dir: str) -> Tuple[str, Dict[str, str]]:
+        """Construye la línea de cmd.exe que ejecuta smartctl por dispositivo y
+        vuelca cada JSON a un archivo temporal (el JSON ya incluye
+        ``smartctl.exit_status``, así que no hace falta el código de retorno).
+
+        Sólo acepta dispositivos y tipos con caracteres seguros: nunca se
+        interpola texto libre en el comando elevado.
+        """
+        outputs: Dict[str, str] = {}
+        commands = []
+        for index, (device, device_type) in enumerate(targets):
+            device = physical_drive_to_device(device)
+            if not _SAFE_DEVICE.match(device) or (device_type and not _SAFE_TYPE.match(device_type)):
+                raise ValueError(f"Dispositivo no válido para la consulta elevada: {device!r}")
+            output = os.path.join(output_dir, f"smart_{index}.json")
+            outputs[device] = output
+            type_args = f" -d {device_type}" if device_type else ""
+            commands.append(f'"{self.smartctl_path}" -a -j{type_args} {device} > "{output}"')
+        return " & ".join(commands), outputs
+
+    def query_elevated(self, targets: List[Tuple[str, Optional[str]]], timeout: float = 120) -> Dict[str, SmartQuery]:
+        """Relanza sólo smartctl elevado (UAC) y lee los JSON resultantes.
+
+        Es opcional y seguro: un único aviso de UAC, sin shell interactiva y
+        con archivos temporales en un directorio propio que se borra al final.
+        """
+        results: Dict[str, SmartQuery] = {}
+        if sys.platform != "win32" or not self.is_available() or not targets:
+            for device, _type in targets:
+                results[physical_drive_to_device(device)] = SmartQuery(
+                    device=physical_drive_to_device(device), error="unavailable")
+            return results
+        output_dir = tempfile.mkdtemp(prefix="ordenasion-smart-")
+        try:
+            command, outputs = self.build_elevated_command(targets, output_dir)
+            comspec = os.environ.get("ComSpec") or "cmd.exe"
+            launched = _shell_execute_elevated(comspec, f'/d /s /c "{command}"', timeout)
+            for device, path in outputs.items():
+                if not launched:
+                    results[device] = SmartQuery(device=device, error="cancelled")
+                    continue
                 try:
-                    data = json.loads(result.stdout)
-                    return {
-                        'model_name': data.get('model_name', 'Desconocido'),
-                        'serial_number': data.get('serial_number', 'N/A'),
-                        'device': device,
-                        'physical_drive': physical_drive
-                    }
-                except json.JSONDecodeError:
-                    return None
-            
-            return None
-            
-        except Exception:
-            return None
+                    stdout = Path(path).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    results[device] = SmartQuery(device=device, error="parse_error")
+                    continue
+                results[device] = self.interpret_output(device, _exit_status(stdout), stdout)
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+        return results
+
+
+def _exit_status(stdout: str) -> int:
+    """Código de retorno guardado por smartctl dentro de su JSON."""
+    try:
+        status = (json.loads(stdout).get("smartctl") or {}).get("exit_status", 0)
+        return int(status)
+    except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+        return RC_OPEN_FAILED
+
+
+def _shell_execute_elevated(executable: str, parameters: str, timeout: float) -> bool:
+    """ShellExecuteExW con el verbo 'runas'; espera a que termine el proceso.
+
+    Devuelve False si el usuario cancela el UAC o no es Windows.
+    """
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD), ("fMask", ctypes.c_ulong), ("hwnd", wintypes.HWND),
+            ("lpVerb", wintypes.LPCWSTR), ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR), ("nShow", ctypes.c_int), ("hInstApp", wintypes.HINSTANCE),
+            ("lpIDList", ctypes.c_void_p), ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD), ("hIconOrMonitor", wintypes.HANDLE), ("hProcess", wintypes.HANDLE),
+        ]
+
+    SEE_MASK_NOCLOSEPROCESS = 0x00000040
+    SEE_MASK_NO_CONSOLE = 0x00008000
+    SW_HIDE = 0
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(info)
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE
+    info.lpVerb = "runas"
+    info.lpFile = executable
+    info.lpParameters = parameters
+    info.nShow = SW_HIDE
+    if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+        return False
+    if not info.hProcess:
+        return False
+    try:
+        ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, int(timeout * 1000))
+    finally:
+        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+    return True
