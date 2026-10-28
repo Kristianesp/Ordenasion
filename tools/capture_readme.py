@@ -97,7 +97,7 @@ def main():
                 config = AppConfig(str(Path(temporary) / "capture-config.json"))
                 config.set_theme_mode("dark")
                 window = FluentAppWindow(config)
-                window.setWindowTitle("Ordenasion 3.5.0 · DEMO / datos ficticios")
+                window.setWindowTitle("Ordenasion 4.0.0 · DEMO / datos ficticios")
                 window.resize(1440, 960)
                 window.show()
                 disks_page = window.page("disks")

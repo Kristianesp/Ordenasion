@@ -1,4 +1,4 @@
-# Compilación y release de Ordenasion 3.5.0
+# Compilación y release de Ordenasion 4.0.0
 
 ## 1. Entorno y paquete
 
@@ -7,17 +7,17 @@ más las herramientas de build, separadas de las de runtime:
 
 ```powershell
 .\venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-build.txt
-New-Item -ItemType Directory -Force artifacts/release-v3.5.0 | Out-Null
-.\venv\Scripts\python.exe -m pip freeze > artifacts/release-v3.5.0/build-environment.txt
+New-Item -ItemType Directory -Force artifacts/release-v4.0.0 | Out-Null
+.\venv\Scripts\python.exe -m pip freeze > artifacts/release-v4.0.0/build-environment.txt
 $buildOriginalPath = $env:PATH
 $buildPythonBase = & .\venv\Scripts\python.exe -c "import sys; print(sys.base_prefix)"
 $env:PATH = "$PWD\venv\Scripts;$buildPythonBase;$env:WINDIR\System32;$env:WINDIR"
-.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --distpath artifacts/release-v3.5.0/dist --workpath artifacts/release-v3.5.0/build OrganizadorAlpha_OPTIMIZED.spec
+.\venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --distpath artifacts/release-v4.0.0/dist --workpath artifacts/release-v4.0.0/build OrganizadorAlpha_OPTIMIZED.spec
 $env:PATH = $buildOriginalPath
 ```
 
 La spec utiliza `main_fluent.py` para conservar la interfaz actual, splash y tema.
-Produce un único `Ordenasion_v3.5.0.exe`, con icono/versión PE, QtMultimedia,
+Produce un único `Ordenasion_v4.0.0.exe`, con icono/versión PE, QtMultimedia,
 branding, Nunito/OFL, tokens y binarios auxiliares disponibles en `bin/`.
 Los hooks de Qt reúnen los recursos necesarios; no se usa `collect_all()` ni se
 agregan WebEngine, Charts, ciencia de datos o frameworks no utilizados.
@@ -42,9 +42,9 @@ Los errores devuelven código distinto de cero y quedan en JSON/log, sin Message
 
 ```powershell
 $env:ORDENASION_SMOKE = '1'
-$env:ORDENASION_SMOKE_REPORT = (Join-Path $PWD 'artifacts/release-v3.5.0/smoke-exe.json')
+$env:ORDENASION_SMOKE_REPORT = (Join-Path $PWD 'artifacts/release-v4.0.0/smoke-exe.json')
 $env:QT_QPA_PLATFORM = 'offscreen'
-$buildProcess = Start-Process -FilePath 'artifacts/release-v3.5.0/dist/Ordenasion_v3.5.0.exe' -WindowStyle Hidden -Wait -PassThru
+$buildProcess = Start-Process -FilePath 'artifacts/release-v4.0.0/dist/Ordenasion_v4.0.0.exe' -WindowStyle Hidden -Wait -PassThru
 $buildProcess.ExitCode
 Get-Content $env:ORDENASION_SMOKE_REPORT
 Remove-Item Env:ORDENASION_SMOKE, Env:ORDENASION_SMOKE_REPORT, Env:QT_QPA_PLATFORM
@@ -62,8 +62,8 @@ Antes de publicar: pruebas focales vigentes, smoke empaquetado con exit0, archiv
 JSON `status=ok`, versión PE correcta, assets presentes, ausencia de datos privados
 en el archivo PyInstaller y `git diff --check`. Registra tamaño y SHA-256.
 
-Commit, push, tag `v3.5.0` y GitHub Release requieren la autorización de publicación.
+Commit, push, tag `v4.0.0` y GitHub Release requieren la autorización de publicación.
 Haz stage de archivos revisados y deja fuera la configuración local. Adjunta sólo
-`Ordenasion_v3.5.0.exe`, con las novedades numeradas de `CHANGELOG.md`; comprueba
+`Ordenasion_v4.0.0.exe`, con las novedades numeradas de `CHANGELOG.md`; comprueba
 posteriormente el asset remoto, versión, tamaño y hash. La compilación local no
 confirma que el release esté publicado.

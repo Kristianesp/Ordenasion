@@ -1,17 +1,17 @@
 <div align="center">
 
-![Ordenasion Alpha 3.5.0 — Tu espacio, en orden](docs/images/banner.png)
+![Ordenasion Alpha 4.0.0 — Tu espacio, en orden](docs/images/banner.png)
 
 # Ordenasion Alpha
 
 **Organiza tus archivos con control. Entiende tu espacio. Cuida tu música.**
 
-![Versión 3.5.0](https://img.shields.io/badge/versión-3.5.0-0078D4?style=flat-square)
+![Versión 4.0.0](https://img.shields.io/badge/versión-4.0.0-0078D4?style=flat-square)
 ![Windows](https://img.shields.io/badge/plataforma-Windows-2382C4?style=flat-square)
 ![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square)
 [![Licencia GPL v3](https://img.shields.io/badge/licencia-GPL_v3-42A5A0?style=flat-square)](LICENSE)
 
-[**⬇ Descargar EXE 3.5.0**](https://github.com/Kristianesp/Ordenasion_alpha/releases/download/v3.5.0/Ordenasion_v3.5.0.exe) · [Última versión](https://github.com/Kristianesp/Ordenasion_alpha/releases/latest) · [Código de la interfaz 3.5](https://github.com/Kristianesp/Ordenasion_alpha/tree/Mejoras-UI)
+[**⬇ Descargar la última versión**](https://github.com/Kristianesp/Ordenasion_alpha/releases/latest) · [Changelog](CHANGELOG.md) · [Código](https://github.com/Kristianesp/Ordenasion_alpha/tree/main)
 
 </div>
 
@@ -37,7 +37,7 @@ Aplicación de escritorio para Windows, desarrollada con Python y PyQt6. Reúne 
 
 </details>
 
-*Capturas de la interfaz real 3.5.0, renderizadas con Qt. Archivos temporales y ocupación ficticia, señalados como DEMO; no representan datos del usuario. Pulsa las miniaturas para ampliarlas.*
+*Capturas de la interfaz real 4.0.0, renderizadas con Qt. Archivos temporales y ocupación ficticia, señalados como DEMO; no representan datos del usuario. Pulsa las miniaturas para ampliarlas.*
 
 ## ✨ Qué puedes hacer
 
@@ -45,35 +45,35 @@ Aplicación de escritorio para Windows, desarrollada con Python y PyQt6. Reúne 
 | :--- | :--- |
 | 📂 **Organizar** | Clasifica por categorías y, opcionalmente, por fecha. Revisa la selección y los destinos antes de confirmar. |
 | 🗺️ **Uso del espacio** | Explora tamaños con mapa y tabla, navega por carpetas, filtra y consulta los elementos mayores. |
-| 💽 **Discos** | Consulta ocupación y salud SMART cuando el dispositivo y las herramientas permiten obtenerla. |
+| 💽 **Discos** | Consulta ocupación y salud SMART, con historial y alertas cuando aumentan los sectores defectuosos. |
 | 🎵 **Música** | Indexa tu biblioteca, reproduce audio, compara copias y edita metadatos. |
-| 🔎 **Duplicados** | Busca candidatos mediante análisis rápido, híbrido o profundo y revisa qué copia conservar. |
+| 🔎 **Duplicados** | Confirma copias por contenido, elige qué conservar con reglas, sustituye copias por hardlinks y encuentra imágenes parecidas. |
 | ⚙️ **Configuración y actividad** | Ajusta apariencia, categorías y exclusiones; sigue tareas, resultados y el registro de la sesión. |
 
-**Tú decides qué se mueve.** La organización incluye vista previa y resolución de conflictos: conservar ambos, sobrescribir u omitir. Deshacer está disponible cuando existe una transacción reversible. El análisis del espacio es manual y no modifica archivos.
+**Tú decides qué se mueve.** La organización incluye vista previa y resolución de conflictos: conservar ambos, sobrescribir u omitir. Cada organización queda en el historial de Actividad y se puede deshacer, también después de cerrar la aplicación. El análisis del espacio es manual y no modifica archivos.
 
-## 🚀 Novedades de 3.5.0
+## 🚀 Novedades de 4.0.0
 
-1. **Inicio operativo:** métricas y gráficas basadas en los últimos datos disponibles, con estados vacíos explícitos.
-2. **Fluent Ocean Frost:** superficies de vidrio, tema global claro/oscuro, navegación lateral y ajustes compactos.
-3. **Organización guiada:** análisis → revisión → resultado; selección conservada y conflictos antes de ejecutar.
-4. **Espacio y biblioteca:** nuevo mapa de carpetas, cancelación cooperativa y herramientas musicales bajo demanda.
-5. **Arranque propio:** icono, splash tematizado, fuentes incluidas y ejecutable Windows con recursos y licencias.
+1. **Organizar, nativo y seguro:** página Fluent nativa; deshacer persistente con historial en Actividad; «por fecha», cancelar, perfiles y reorganizar corregidos.
+2. **Duplicados fiables:** confirmación por hash por defecto, nunca se retiran todas las copias; reglas para conservar, hardlinks, imágenes parecidas y exportación a CSV.
+3. **Salud SMART correcta:** cada unidad con su disco real, discos con fallos detectados, historial con alertas y reintento como administrador.
+4. **Más rápida:** la ventana se construye en ~0,6 s (antes ~1,75 s), el cambio de tema es casi instantáneo y las páginas pesadas se cargan al abrirlas.
+5. **Más cómoda:** atajos con ayuda (F1), tema «Sistema», arrastrar carpetas, aviso al terminar tareas y «Abrir en el Explorador».
 
-Consulta el [changelog completo de 3.5.0](https://github.com/Kristianesp/Ordenasion_alpha/blob/Mejoras-UI/CHANGELOG.md#350--2026-09-27) y las [notas de la release](https://github.com/Kristianesp/Ordenasion_alpha/releases/tag/v3.5.0).
+Tus datos (configuración, cachés e historial) se guardan ahora en `%LOCALAPPDATA%\Ordenasion`; al arrancar la 4.0 se copian automáticamente desde la ubicación anterior. Consulta el [changelog completo](CHANGELOG.md).
 
 ## ▶️ Empezar
 
 ### Con el ejecutable
 
-Descarga [Ordenasion_v3.5.0.exe](https://github.com/Kristianesp/Ordenasion_alpha/releases/download/v3.5.0/Ordenasion_v3.5.0.exe) y ábrelo en Windows; no necesitas instalar Python. Elige una carpeta, analiza y revisa los movimientos antes de confirmar.
+Descarga el ejecutable de la [última versión publicada](https://github.com/Kristianesp/Ordenasion_alpha/releases/latest) y ábrelo en Windows; no necesitas instalar Python. Elige una carpeta, analiza y revisa los movimientos antes de confirmar.
 
 ### Desde el código
 
-La interfaz 3.5 está en **Mejoras-UI**. En Windows, con Git y Python 3.12 x64:
+En Windows, con Git y Python 3.12 x64:
 
 ```powershell
-git clone --branch Mejoras-UI https://github.com/Kristianesp/Ordenasion_alpha.git
+git clone https://github.com/Kristianesp/Ordenasion_alpha.git
 cd Ordenasion_alpha
 py -3.12 -m venv venv
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
@@ -84,9 +84,9 @@ El BAT utiliza el entorno virtual local. `arrancar_ordenasion.bat --comprobar` v
 
 ### Compilar y verificar
 
-La [guía de compilación y release](https://github.com/Kristianesp/Ordenasion_alpha/blob/Mejoras-UI/releases_tags_creacion_exes.md) explica las dependencias de build, la spec de PyInstaller y el smoke aislado. El paquete esperado es `Ordenasion_v3.5.0.exe`.
+La [guía de compilación](GUIA_COMPILACION_EXE.md) y la [guía de release](releases_tags_creacion_exes.md) explican las dependencias de build, la spec de PyInstaller y el smoke aislado. El paquete esperado es `Ordenasion_v4.0.0.exe`.
 
-Las [pruebas](https://github.com/Kristianesp/Ordenasion_alpha/tree/Mejoras-UI/tests) cubren organización, conflictos, espacio, temas, audio y empaquetado. Para ejecutarlas en el entorno de desarrollo:
+Las [pruebas](tests) cubren organización y deshacer, duplicados, SMART, espacio, temas, audio y empaquetado, y se ejecutan en GitHub Actions en cada push. Para ejecutarlas en el entorno de desarrollo:
 
 ```powershell
 .\venv\Scripts\python.exe -m pip install pytest
@@ -95,4 +95,4 @@ Las [pruebas](https://github.com/Kristianesp/Ordenasion_alpha/tree/Mejoras-UI/te
 
 ## 📄 Licencia
 
-Código distribuido bajo **GNU GPL v3**, según [LICENSE](LICENSE). Las fuentes Nunito incluyen su [licencia OFL](https://github.com/Kristianesp/Ordenasion_alpha/blob/Mejoras-UI/assets/fonts/OFL.txt); las dependencias y herramientas conservan sus respectivas licencias.
+Código distribuido bajo **GNU GPL v3**, según [LICENSE](LICENSE). Las fuentes Nunito incluyen su [licencia OFL](assets/fonts/OFL.txt); las dependencias y herramientas conservan sus respectivas licencias.

@@ -18,8 +18,8 @@ ROOT = Path(main_fluent.__file__).resolve().parent
 
 
 def test_release_version_and_spec_use_fluent_assets_without_private_data():
-    assert APP_VERSION == "3.5.0" and VERSION_INFO == (3, 5, 0, 0)
-    assert EXECUTABLE_NAME == "Ordenasion_v3.5.0"
+    assert APP_VERSION == "4.0.0" and VERSION_INFO == (4, 0, 0, 0)
+    assert EXECUTABLE_NAME == "Ordenasion_v4.0.0"
     calls = {}
 
     def analysis(*args, **kwargs):
@@ -57,7 +57,7 @@ def test_release_version_and_spec_use_fluent_assets_without_private_data():
     assert {"branding", "fonts", "design-tokens.json", "LICENSE"} <= set(included)
     assert not {"app_config.json", "organization_profiles.json", "categories_config.json"} & set(included)
     pe = Path(calls["exe"]["version"]).read_text(encoding="utf-8")
-    assert "filevers=(3, 5, 0, 0)" in pe and "Ordenasion_v3.5.0.exe" in pe
+    assert "filevers=(4, 0, 0, 0)" in pe and "Ordenasion_v4.0.0.exe" in pe
 
 
 def test_source_release_smoke_preserves_caller_config_and_exits_cleanly(tmp_path):
