@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QSizePolicy,
     QGraphicsOpacityEffect,
+    QApplication,
 )
 from PyQt6.QtCore import (
     Qt,
@@ -58,11 +59,12 @@ from src.utils.fast_theme_applier import FastThemeApplier
 from src.utils.theme_cache import ThemeCache
 from src.utils.app_config import AppConfig
 from src.utils.version import APP_VERSION
+from src.utils.logger import warn as log_warn
 from src.core.category_manager import CategoryManager
 from src.core.disk_manager import DiskManager
 from src.core.organization_profiles import ProfileManager
 from src.core.transaction_manager import TransactionManager
-from src.core.workers import AnalysisWorker, OrganizeWorker
+from src.core.workers import AnalysisWorker, OrganizeWorker, RollbackWorker
 from src.core.application_state import app_state, EventType
 from src.gui.disk_viewer import DiskViewer
 from src.gui.config_dialog import ConfigDialog
@@ -115,9 +117,21 @@ class FileOrganizerGUI(QMainWindow):
         self.file_movements = []
         self.duplicates_dashboard = None
         self.profile_manager = ProfileManager()
+        # Gestor ÚNICO de transacciones: lo comparten la ventana, el worker de
+        # organización y el historial, y recarga el registro tras reiniciar.
         self.transaction_manager = TransactionManager()
-        self.last_transaction_id = None
+        self.last_transaction_id = self.transaction_manager.get_last_undoable_transaction_id()
         self.last_operation_summary = None
+        self.current_rollback_task_id = None
+        # Exclusiones del perfil cargado (independientes de las rutas protegidas
+        # que configura el usuario)
+        self._profile_exclusions: List[str] = []
+        # Registro de la interfaz: mensajes en lotes y contador incremental
+        self._log_queue: List[str] = []
+        self._log_entry_count = 0
+        self._log_flush_timer = None
+        self._pending_task_messages: Dict[str, str] = {}
+        self._shutdown_done = False
         self.current_analysis_task_id = None
         self._analysis_folder_path = None
         self._analysis_result_path = None
@@ -139,6 +153,10 @@ class FileOrganizerGUI(QMainWindow):
         if active_profile and hasattr(self, "profile_combo"):
             self.profile_combo.setCurrentText(active_profile.name)
         self.refresh_saved_paths()
+        # Última red de seguridad: nunca destruir un QThread en marcha al salir
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._shutdown_workers)
 
     def _init_disk_manager(self):
         """Inicializa DiskManager usando el estado centralizado"""
@@ -897,7 +915,9 @@ class FileOrganizerGUI(QMainWindow):
                 self.similarity_spinbox.value(),
                 min_file_size_mb=self.min_size_spinbox.value(),
                 ignored_extensions=self.app_config.get_ignored_extensions(),
-                ignored_paths=self.app_config.get_ignored_paths(),
+                ignored_paths=list(self.app_config.get_ignored_paths())
+                + list(getattr(self, "_profile_exclusions", [])),
+                category_manager=self.category_manager,
             )
 
             # Guardar referencia al worker para limpieza
@@ -912,6 +932,7 @@ class FileOrganizerGUI(QMainWindow):
                 )
             )
             analysis_worker.analysis_complete.connect(self.on_analysis_complete)
+            analysis_worker.analysis_cancelled.connect(self.on_analysis_cancelled)
             analysis_worker.error_occurred.connect(self.on_analysis_error)
 
             # Conectar señal de finalización para limpiar el worker
@@ -988,6 +1009,16 @@ class FileOrganizerGUI(QMainWindow):
 
             # Inicializar estadisticas de seleccion (sin elementos seleccionados)
             self.update_selected_statistics()
+
+    def on_analysis_cancelled(self):
+        """El usuario canceló el análisis: se restaura la interfaz sin resultados."""
+        self.analyze_btn.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        if self.current_analysis_task_id:
+            task_registry.finish_task(self.current_analysis_task_id, "Cancelada")
+            self.current_analysis_task_id = None
+        self.log_message("⏹️ Análisis cancelado")
+        self.update_selection_count()
 
     def on_analysis_error(self, error_message):
         """Maneja errores durante el análisis"""
@@ -1153,7 +1184,8 @@ class FileOrganizerGUI(QMainWindow):
         matches_analysis = (bool(path) and os.path.isdir(path)
                             and os.path.normcase(os.path.realpath(path)) == self._analysis_result_path)
         enabled = (selected_count > 0 and matches_analysis
-                   and not self.current_organize_task_id and not self.current_analysis_task_id)
+                   and not self.current_organize_task_id and not self.current_analysis_task_id
+                   and not getattr(self, "current_rollback_task_id", None))
         self.organize_btn.setEnabled(enabled)
         self.preview_btn.setEnabled(enabled)
 
@@ -1340,7 +1372,8 @@ class FileOrganizerGUI(QMainWindow):
     def start_organization(self):
         """🚀 MEJORA: Inicia la organización usando el modelo virtualizado"""
         if (getattr(self, "_organization_review_open", False)
-                or self.current_organize_task_id or self.current_analysis_task_id):
+                or self.current_organize_task_id or self.current_analysis_task_id
+                or getattr(self, "current_rollback_task_id", None)):
             return
         folder_path = self.folder_input.text().strip()
         if (not os.path.isdir(folder_path)
@@ -1358,7 +1391,13 @@ class FileOrganizerGUI(QMainWindow):
 
         folder_path = self.folder_input.text().strip()
 
-        # Mostrar Preview antes de organizar
+        # Una única traducción categoría → carpeta para vista previa y worker
+        category_manager = getattr(self, "category_manager", None)
+        category_folder = getattr(category_manager, "get_category_folder", None)
+        folder_names_getter = getattr(category_manager, "get_category_folder_names", None)
+        category_folder_names = folder_names_getter() if callable(folder_names_getter) else None
+
+        # Mostrar Preview antes de organizar (calcula el plan que se ejecutará)
         preview = PreviewDialog(
             selected_folder_movements,
             selected_file_movements,
@@ -1367,6 +1406,8 @@ class FileOrganizerGUI(QMainWindow):
             organize_by_date=self.organize_by_date_checkbox.isChecked(),
             check_duplicates=self.check_duplicates_checkbox.isChecked(),
             conflict_policy=self.app_config.get_organization_conflict_policy(),
+            category_folder=category_folder,
+            category_folder_names=category_folder_names,
         )
         self._organization_review_open = True
         try:
@@ -1377,6 +1418,11 @@ class FileOrganizerGUI(QMainWindow):
             self.log_message("Organizacion cancelada por el usuario (preview)")
             return
 
+        # Rutas protegidas del usuario + exclusiones del perfil activo
+        protected_paths = list(self.app_config.get_protected_paths()) + list(
+            getattr(self, "_profile_exclusions", [])
+        )
+
         # Crear worker usando el gestor centralizado
         worker_id = f"organize_{int(time.time())}"
         organize_worker = OrganizeWorker(
@@ -1385,8 +1431,11 @@ class FileOrganizerGUI(QMainWindow):
             selected_file_movements,
             organize_by_date=self.organize_by_date_checkbox.isChecked(),
             check_duplicates=self.check_duplicates_checkbox.isChecked(),
-            protected_paths=self.app_config.get_protected_paths(),
+            protected_paths=protected_paths,
             conflict_policy=preview.get_conflict_policy(),
+            transaction_manager=getattr(self, "transaction_manager", None),
+            plan=preview.get_plan() if hasattr(preview, "get_plan") else None,
+            category_folder=category_folder,
         )
 
         # Guardar referencia al worker para limpieza
@@ -1421,24 +1470,41 @@ class FileOrganizerGUI(QMainWindow):
         self.log_message(f"✅ Worker de organización iniciado: {worker_id}")
 
     def on_organize_complete(self, success, message):
-        """Maneja completación de la organización"""
+        """Maneja completación de la organización.
+
+        ``success`` solo es True si todo se completó; el estado real
+        (cancelado, completado con errores, error) viene en el resumen.
+        """
         # Restaurar UI
         self.organize_btn.setEnabled(True)
         self.organize_btn.setText("Revisar y organizar")
         self.progress_bar.setVisible(False)
+        self._flush_log()
 
-        if success:
-            if self.current_organize_task_id:
-                task_registry.finish_task(self.current_organize_task_id, "Completada")
-                self.current_organize_task_id = None
-            self.log_message("✅ " + message)
-            if self.last_operation_summary:
-                OperationSummaryDialog(self.last_operation_summary, self).exec()
-            self._schedule_post_organization_refresh()
+        summary = self.last_operation_summary or {}
+        status = summary.get("status", "completado" if success else "error")
+        task_status = {
+            "completado": "Completada",
+            "completado con errores": "Completada con errores",
+            "cancelado": "Cancelada",
+        }.get(status, "Error")
+        if self.current_organize_task_id:
+            task_registry.finish_task(self.current_organize_task_id, task_status)
+            self.current_organize_task_id = None
+
+        transaction_id = summary.get("transaction_id")
+        moved = summary.get("files_moved", 0) + summary.get("folders_moved", 0)
+        if status in ("completado", "completado con errores", "cancelado"):
+            self.log_message(("✅ " if success else "⚠️ ") + message)
+            if summary:
+                undo = None
+                if status != "completado" and transaction_id and moved:
+                    # Ofrecer deshacer lo que sí se movió (cancelación o errores)
+                    undo = lambda txn=transaction_id: self.rollback_transaction(txn, confirm=False)
+                OperationSummaryDialog(summary, self, undo_callback=undo).exec()
+            if self.current_rollback_task_id is None:
+                self._schedule_post_organization_refresh()
         else:
-            if self.current_organize_task_id:
-                task_registry.finish_task(self.current_organize_task_id, "Error")
-                self.current_organize_task_id = None
             self.log_message("❌ " + message)
             QMessageBox.critical(self, "Error de Organización", message)
         self.rollback_btn.setEnabled(bool(self.last_transaction_id))
@@ -1468,10 +1534,16 @@ class FileOrganizerGUI(QMainWindow):
         self.last_operation_summary = summary
         self.operation_state_changed.emit()
 
+    def get_transaction_history(self, limit: int = 50):
+        """Historial persistente de organizaciones (la más reciente primero)."""
+        return self.transaction_manager.get_transactions(limit)
+
     def rollback_last_operation(self):
-        """Revierte la última organización confirmada."""
-        if self.current_organize_task_id:
+        """Revierte la última organización que aún se puede deshacer."""
+        if self.current_organize_task_id or self.current_rollback_task_id:
             return
+        if not self.last_transaction_id:
+            self.last_transaction_id = self.transaction_manager.get_last_undoable_transaction_id()
         if not self.last_transaction_id:
             QMessageBox.information(
                 self,
@@ -1479,36 +1551,91 @@ class FileOrganizerGUI(QMainWindow):
                 "No hay una transacción reciente para deshacer.",
             )
             return
+        self.rollback_transaction(self.last_transaction_id)
 
-        reply = QMessageBox.question(
-            self,
-            "Deshacer última organización",
-            "¿Quieres revertir la última organización completada?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
+    def rollback_transaction(self, transaction_id: str, confirm: bool = True) -> bool:
+        """Deshace cualquier transacción del historial en segundo plano.
 
-        if self.transaction_manager.rollback_transaction(self.last_transaction_id):
-            self.log_message(f"✅ Rollback completado: {self.last_transaction_id}")
+        Returns:
+            True si se inició el proceso de deshacer.
+        """
+        if not transaction_id or self.current_organize_task_id or self.current_rollback_task_id:
+            return False
+        if confirm:
+            is_last = transaction_id == self.last_transaction_id
+            reply = QMessageBox.question(
+                self,
+                "Deshacer última organización" if is_last else "Deshacer organización",
+                "¿Quieres revertir la última organización completada?"
+                if is_last
+                else "¿Quieres revertir esta organización del historial?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return False
+
+        worker_id = f"rollback_{int(time.time())}"
+        worker = RollbackWorker(self.transaction_manager, transaction_id)
+        self._active_workers.append(worker)
+        worker.rollback_finished.connect(self.on_rollback_finished)
+        worker.finished.connect(lambda: self._cleanup_worker(worker))
+        task_registry.start_task(worker_id, "Deshacer organización", None)
+        self.current_rollback_task_id = worker_id
+        self.rollback_btn.setEnabled(False)
+        self.organize_btn.setEnabled(False)
+        self.log_message(f"↩️ Deshaciendo {transaction_id}...")
+        self.operation_state_changed.emit()
+        worker.start()
+        return True
+
+    def on_rollback_finished(self, transaction_id: str, ok: bool, result: dict):
+        """Muestra el resultado de deshacer y refresca el estado."""
+        if self.current_rollback_task_id:
+            task_registry.finish_task(
+                self.current_rollback_task_id, "Completada" if ok else "Con errores"
+            )
+            self.current_rollback_task_id = None
+        self.last_transaction_id = self.transaction_manager.get_last_undoable_transaction_id()
+        for warning in result.get("warnings", []):
+            self.log_message(f"⚠️ {warning}")
+        for error_text in result.get("errors", []):
+            self.log_message(f"❌ {error_text}")
+
+        summary = self.last_operation_summary
+        if ok and summary is not None and summary.get("transaction_id") in (None, transaction_id):
+            self.last_operation_summary = dict(summary, undone=True)
+
+        if result.get("already_reverted"):
+            QMessageBox.information(
+                self,
+                "Ya deshecha",
+                "Esta organización ya se había deshecho; no se ha repetido.",
+            )
+        elif ok:
+            self.log_message(f"✅ Rollback completado: {transaction_id}")
+            extra = ""
+            if result.get("renamed"):
+                extra = (
+                    f"\n\n{len(result['renamed'])} elementos se restauraron con otro nombre "
+                    "porque su ubicación original estaba ocupada."
+                )
             QMessageBox.information(
                 self,
                 "Rollback completado",
-                "Los cambios de la última organización se han revertido.",
+                "Los cambios de la organización se han revertido." + extra,
             )
-            self.rollback_btn.setEnabled(False)
-            self.last_transaction_id = None
-            if self.last_operation_summary is not None:
-                self.last_operation_summary = dict(self.last_operation_summary, undone=True)
             self._schedule_post_organization_refresh()
         else:
-            self.log_message(f"❌ Error al revertir: {self.last_transaction_id}")
+            self.log_message(f"❌ Error al revertir: {transaction_id}")
             QMessageBox.warning(
                 self,
                 "Rollback incompleto",
                 "No se pudieron revertir todos los cambios. Revisa el log de operaciones.",
             )
+            self._schedule_post_organization_refresh()
+        self.rollback_btn.setEnabled(bool(self.last_transaction_id))
+        self.update_selection_count()
         self.operation_state_changed.emit()
 
     def refresh_profiles(self):
@@ -1529,11 +1656,17 @@ class FileOrganizerGUI(QMainWindow):
         if not profile:
             return
 
-        self.folder_input.setText(profile.folder_path)
+        # Un perfil sin carpeta no borra la ruta que ya escribió el usuario
+        if (profile.folder_path or "").strip():
+            self.folder_input.setText(profile.folder_path)
         self.move_folders_checkbox.setChecked(profile.move_folders)
         self.similarity_spinbox.setValue(profile.similarity_threshold)
         self.organize_by_date_checkbox.setChecked(profile.organize_by_date)
-        self.app_config.set_protected_paths(profile.exclude_patterns)
+        # Las exclusiones del perfil se suman a las rutas protegidas del
+        # usuario solo mientras el perfil está activo; nunca las sustituyen.
+        self._profile_exclusions = [
+            str(path) for path in (profile.exclude_patterns or []) if str(path).strip()
+        ]
         self.log_message(f"🧩 Perfil cargado: {profile.name}")
 
     def save_current_profile(self):
@@ -1562,7 +1695,7 @@ class FileOrganizerGUI(QMainWindow):
         profile.move_folders = self.move_folders_checkbox.isChecked()
         profile.similarity_threshold = self.similarity_spinbox.value()
         profile.organize_by_date = self.organize_by_date_checkbox.isChecked()
-        profile.exclude_patterns = self.app_config.get_protected_paths()
+        profile.exclude_patterns = list(getattr(self, "_profile_exclusions", []))
         profile.selected_categories = sorted(
             {
                 row_data.get("category")
@@ -1740,8 +1873,12 @@ class FileOrganizerGUI(QMainWindow):
         animation.start()
 
     def _handle_task_progress(self, task_id: str, message: str):
-        """Actualiza task center y log."""
-        task_registry.update_task(task_id, message)
+        """Actualiza task center y log (agrupado en lotes por el temporizador)."""
+        pending = getattr(self, "_pending_task_messages", None)
+        if pending is None:
+            task_registry.update_task(task_id, message)
+        else:
+            pending[task_id] = message
         self.log_message(message)
 
     def apply_theme_and_font_together(self, theme_name: str, font_size: int):
@@ -1809,16 +1946,16 @@ class FileOrganizerGUI(QMainWindow):
             self.log_message(f"Traceback: {traceback.format_exc()}")
 
     def _cleanup_worker(self, worker):
-        """Limpia un worker después de que termine"""
+        """Limpia un worker después de que termine (nunca uno en marcha)"""
         try:
             if worker in self._active_workers:
                 self._active_workers.remove(worker)
-            # Esperar a que el thread termine antes de eliminarlo
-            if worker.isRunning():
-                worker.wait(1000)  # Esperar máximo 1 segundo
+            # finished ya se emitió: wait() solo espera a que el hilo salga
+            worker.wait()
             worker.deleteLater()
-        except Exception:
-            pass
+        except RuntimeError as exc:
+            # El objeto Qt ya se había destruido
+            log_warn(f"No se pudo limpiar el worker: {exc}")
 
     def apply_theme_to_all_widgets_simple(
         self, palette, css_styles, update_visual: bool = True
@@ -2188,8 +2325,14 @@ class FileOrganizerGUI(QMainWindow):
                 self.add_categories_info(child.layout())
                 break
 
+    LOG_FLUSH_INTERVAL_MS = 100
+
     def log_message(self, message):
-        """Añade un mensaje al log"""
+        """Añade un mensaje al log.
+
+        Los mensajes se acumulan y se vuelcan en lote cada ~100 ms: con miles
+        de archivos la interfaz no se repinta una vez por archivo.
+        """
         from datetime import datetime
 
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -2200,11 +2343,44 @@ class FileOrganizerGUI(QMainWindow):
             level_color = "#ed6c02"
         elif "✅" in message:
             level_color = "#2e7d32"
-        safe_message = html.escape(message)
-        self.log_text.append(
+        safe_message = html.escape(str(message))
+        if not hasattr(self, "_log_queue"):
+            self._log_queue = []
+            self._log_entry_count = 0
+            self._log_flush_timer = None
+        self._log_queue.append(
             f"<span style='color:#888'>[{timestamp}]</span> "
             f"<span style='color:{level_color}'>{safe_message}</span>"
         )
+        timer = getattr(self, "_log_flush_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(self.LOG_FLUSH_INTERVAL_MS)
+            timer.timeout.connect(self._flush_log)
+            self._log_flush_timer = timer
+        if not timer.isActive():
+            timer.start()
+
+    def _flush_log(self):
+        """Vuelca los mensajes pendientes al widget de log en una sola pasada."""
+        pending_tasks = getattr(self, "_pending_task_messages", None)
+        if pending_tasks:
+            for task_id, task_message in list(pending_tasks.items()):
+                task_registry.update_task(task_id, task_message)
+            pending_tasks.clear()
+
+        queue = getattr(self, "_log_queue", None)
+        if not queue or not hasattr(self, "log_text"):
+            return
+        self._log_queue = []
+        self.log_text.setUpdatesEnabled(False)
+        try:
+            for line in queue:
+                self.log_text.append(line)
+        finally:
+            self.log_text.setUpdatesEnabled(True)
+        self._log_entry_count = getattr(self, "_log_entry_count", 0) + len(queue)
 
         # Auto-scroll al final
         scrollbar = self.log_text.verticalScrollBar()
@@ -2224,8 +2400,11 @@ class FileOrganizerGUI(QMainWindow):
         )
 
         if reply == QMessageBox.StandardButton.Yes:
+            self._log_queue = []
             self.log_text.clear()
+            self._log_entry_count = 0
             self.log_message("🗑️ Log limpiado por el usuario")
+            self._flush_log()
             self.update_log_info()
 
     def export_log(self):
@@ -2244,6 +2423,7 @@ class FileOrganizerGUI(QMainWindow):
         )
 
         if filepath:
+            self._flush_log()
             try:
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write("📝 LOG DEL ORGANIZADOR DE ARCHIVOS\n")
@@ -2284,19 +2464,8 @@ class FileOrganizerGUI(QMainWindow):
         self.log_info_label.setText(f"📊 Total de entradas: {entry_count}")
 
     def get_log_entry_count(self):
-        """Obtiene el número total de entradas en el log"""
-        text = self.log_text.toPlainText()
-        if not text.strip():
-            return 0
-
-        # Contar líneas que empiezan con timestamp [HH:MM:SS]
-        lines = text.split("\n")
-        count = 0
-        for line in lines:
-            if line.strip() and line.strip().startswith("[") and "]" in line:
-                count += 1
-
-        return count
+        """Número total de entradas del log (contador incremental)"""
+        return getattr(self, "_log_entry_count", 0)
 
     def on_disk_selected_for_organize(self, disk_path):
         """Maneja la selección de un disco para organizar archivos"""
@@ -2449,21 +2618,76 @@ class FileOrganizerGUI(QMainWindow):
                 f"📊 Ordenando por columna {logical_index} ({'descendente' if new_order == Qt.SortOrder.DescendingOrder else 'ascendente'})"
             )
 
+    def has_running_organization(self) -> bool:
+        """True si hay una organización o un deshacer en curso."""
+        return any(
+            worker.isRunning()
+            for worker in getattr(self, "_active_workers", [])
+            if isinstance(worker, (OrganizeWorker, RollbackWorker))
+        )
+
+    def request_shutdown(self, confirm: bool = True) -> bool:
+        """Prepara el cierre: pide confirmación, detiene y espera a los workers.
+
+        Devuelve False si el usuario decide no cerrar. Pensado para que la
+        ventana V2 lo llame desde su closeEvent antes de cerrar.
+        """
+        if getattr(self, "_shutdown_done", False):
+            return True
+        if confirm and self.has_running_organization():
+            reply = QMessageBox.question(
+                self,
+                "Organización en curso",
+                "Hay una organización (o un deshacer) en curso.\n\n"
+                "¿Detenerla de forma segura y salir? Lo que ya se haya movido "
+                "quedará registrado en el historial y se podrá deshacer.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return False
+        self._shutdown_workers()
+        return True
+
+    def _shutdown_workers(self):
+        """Detiene todos los workers y espera a que terminen sus hilos.
+
+        Nunca se destruye un QThread en marcha: se llama a stop() (el
+        worker termina el elemento actual y cierra su transacción) y se
+        espera sin límite a que el hilo salga.
+        """
+        workers = list(getattr(self, "_active_workers", []))
+        for worker in workers:
+            stop = getattr(worker, "stop", None)
+            if callable(stop):
+                try:
+                    stop()
+                except RuntimeError as exc:
+                    log_warn(f"No se pudo detener un worker: {exc}")
+        for worker in workers:
+            try:
+                if worker.isRunning():
+                    worker.wait()
+            except RuntimeError as exc:
+                log_warn(f"No se pudo esperar a un worker: {exc}")
+        self._shutdown_done = True
+
     def closeEvent(self, event):
         """Maneja el cierre de la ventana con limpieza completa"""
         try:
+            if not self.request_shutdown():
+                event.ignore()
+                return
             self.log_message("🔄 Cerrando aplicación...")
 
-            # Limpiar todos los workers activos
+            # Los hilos ya terminaron: ahora sí se pueden liberar
             if hasattr(self, "_active_workers"):
                 for worker in self._active_workers[:]:  # Copia de la lista
                     try:
-                        if worker.isRunning():
-                            worker.quit()
-                            worker.wait(2000)  # Esperar máximo 2 segundos
-                        worker.deleteLater()
-                    except:
-                        pass
+                        if not worker.isRunning():
+                            worker.deleteLater()
+                    except RuntimeError as exc:
+                        log_warn(f"Worker ya destruido al cerrar: {exc}")
                 self._active_workers.clear()
 
             # Limpiar estado centralizado (si está disponible)
@@ -2476,6 +2700,7 @@ class FileOrganizerGUI(QMainWindow):
                 )
 
             self.log_message("✅ Aplicación cerrada correctamente")
+            self._flush_log()
 
         except Exception as e:
             self.log_message(f"❌ Error durante el cierre: {e}")

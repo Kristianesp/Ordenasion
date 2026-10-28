@@ -5,7 +5,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtWidgets import QApplication
 
 from src.core.category_manager import CategoryManager
 from src.core.fs_safety import is_junk_file_name, is_system_path, long_path
@@ -20,8 +20,13 @@ from src.core.workers import AnalysisWorker, OrganizeWorker
 from src.utils.constants import VARIOS_FOLDER
 
 
+APP = None
+
+
 def _app():
-    return QCoreApplication.instance() or QCoreApplication([])
+    global APP
+    APP = QApplication.instance() or QApplication([])
+    return APP
 
 
 def _manager(tmp_path):
