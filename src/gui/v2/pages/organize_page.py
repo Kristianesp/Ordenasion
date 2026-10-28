@@ -338,6 +338,8 @@ class OrganizePage(ScrollArea):
         self.stats_label.setObjectName("stats_label")
         self.stats_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         header.content_layout.addWidget(self.stats_label, 1)
+        # Sin resultados el resumen se oculta: los botones no deben estirarse
+        header.content_layout.addStretch()
         self.rollback_btn = PushButton(FluentIcon.RETURN, "Deshacer")
         self.rollback_btn.setAccessibleName("Deshacer la última organización")
         self.rollback_btn.setToolTip("Revierte la última organización completada")

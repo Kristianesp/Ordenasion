@@ -789,6 +789,13 @@ class FluentAppWindow(FluentWindow):
         settings = self._routes.get("settings")
         if settings is not None:
             settings.sync_theme_selector()
+        self._sync_task_badge()
+
+    def _sync_task_badge(self) -> None:
+        """qfluentwidgets vuelve a mostrar la insignia oculta al repintar la navegación."""
+        feedback = getattr(self, "task_feedback", None)
+        if feedback is not None:
+            feedback.refresh()
 
     # ------------------------------------------------------------ atajos
     NAVIGATION_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
@@ -873,6 +880,7 @@ class FluentAppWindow(FluentWindow):
             self.navigationInterface.expand(useAni=False)
         else:
             self.navigationInterface.panel.collapse()
+        self._sync_task_badge()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

@@ -144,3 +144,16 @@ def test_last_visited_page_is_restored(tmp_path):
         assert second.stackedWidget.currentWidget() is second._routes["activity"]
         second.close()
         app.processEvents()
+
+
+def test_badge_stays_hidden_after_theme_change(shell):
+    from src.gui.task_center import task_registry
+
+    task_registry.start_task("badge", "Prueba")
+    task_registry.finish_task("badge", "Completada")
+    badge = shell.task_feedback.badge
+    assert badge is not None and badge.isHidden()
+    shell.set_theme_mode("dark" if shell.config.get_theme_mode() != "dark" else "light")
+    shell._cleanup_theme_transition()
+    QApplication.processEvents()
+    assert badge.isHidden()
