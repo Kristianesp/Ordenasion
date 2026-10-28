@@ -26,7 +26,8 @@ binaries = [(str(project_root / "bin" / name), "bin")
 lazy_gui_modules = ["src.gui.v2.pages.organize_page", "src.gui.v2.pages.organize_support",
                     "src.gui.v2.pages.feature_pages", "src.gui.config_dialog", "src.gui.rule_panel",
                     "src.gui.operation_summary_dialog", "src.gui.preview_dialog", "src.gui.task_center",
-                    "src.gui.disk_viewer", "src.gui.music_duplicates_view", "src.gui.duplicates_dashboard"]
+                    "src.gui.disk_viewer", "src.gui.music_duplicates_view", "src.gui.duplicates_dashboard",
+                    "src.gui.v2.release_smoke", "src.gui.v2.release_e2e"]
 hiddenimports = ["PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets", "PyQt6.QtMultimedia",
                  "PyQt6.sip", "psutil", "wmi", "mutagen", *lazy_gui_modules]
 excluded_modules = ["matplotlib", "numpy", "reportlab", "schedule", "torch",

@@ -111,8 +111,18 @@ def main() -> int:
     if os.environ.get("ORDENASION_SMOKE") == "1":
         from src.gui.v2.release_smoke import run_smoke
         return run_smoke(start_window, dispose_window)
+    from src.utils import gc_guard
+
+    if os.environ.get("ORDENASION_E2E") == "1":
+        from src.gui.v2.release_e2e import run
+        app = QApplication(sys.argv)  # la referencia mantiene viva la aplicación
+        gc_guard.install(app)
+        return run(start_window, dispose_window)
     _milestone("librerías cargadas")
     app = QApplication(sys.argv)
+    # Los ciclos con widgets se recogen sólo en el hilo de la interfaz: nunca
+    # desde el hilo que organiza ni a mitad de un recorrido de qfluentwidgets.
+    gc_guard.install(app)
     _milestone("QApplication creada")
     window = start_window(app)
     if window is None:
@@ -123,10 +133,16 @@ def main() -> int:
     finally:
         window._startup_splash.close()
         dispose_window(window)
+        gc_guard.uninstall()
         from src.utils import startup_diagnostics
 
         startup_diagnostics.shutdown()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        exit_code = main()
+    finally:
+        # También en los modos smoke/E2E: quita la marca de sesión en curso
+        startup_diagnostics.shutdown()
+    raise SystemExit(exit_code)

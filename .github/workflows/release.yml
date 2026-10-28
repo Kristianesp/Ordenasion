@@ -14,8 +14,8 @@ on:
       - "requirements*.txt"
       - "packaging/**"
       - "main_fluent.py"
-      - "src/gui/v2/startup_splash.py"
-      - "src/utils/startup_diagnostics.py"
+      - "src/**"
+      - "tools/**"
   workflow_dispatch:
     inputs:
       publicar:
@@ -128,6 +128,36 @@ jobs:
             if (-not $visible) { $failed += $kind }
           }
           if ($failed) { throw "La ventana no apareció: $($failed -join ', ')" }
+
+      - name: Organizar de punta a punta (ventana real)
+        run: |
+          # Analiza una carpeta temporal, marca la confirmación de la vista
+          # previa, organiza, cierra el resumen y deshace, con la plataforma
+          # gráfica real y sobre cada ejecutable (y desde el código).
+          $name = python -c "from src.utils.version import EXECUTABLE_NAME; print(EXECUTABLE_NAME)"
+          Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+          Remove-Item Env:ORDENASION_SMOKE -ErrorAction SilentlyContinue
+          $env:ORDENASION_E2E = "1"
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          $targets = [ordered]@{ "codigo" = $null; "onefile" = "dist-onefile/$name.exe"; "onedir" = "dist-onedir/$name/$name.exe" }
+          $failed = @()
+          foreach ($kind in $targets.Keys) {
+            $env:ORDENASION_DATA_DIR = Join-Path $env:RUNNER_TEMP "ordenasion-e2e-$kind"
+            $env:ORDENASION_E2E_LOG = Join-Path $PWD "smoke/e2e-$kind.log"
+            if ($targets[$kind]) {
+              $process = Start-Process -FilePath (Resolve-Path $targets[$kind]) -Wait -PassThru
+            } else {
+              $process = Start-Process -FilePath python -ArgumentList "-X", "faulthandler", "main_fluent.py" -Wait -PassThru -NoNewWindow
+            }
+            Write-Host "===== Organizar $kind · código de salida $($process.ExitCode) ====="
+            Get-Content $env:ORDENASION_E2E_LOG -ErrorAction SilentlyContinue
+            Get-ChildItem (Join-Path $env:ORDENASION_DATA_DIR "logs") -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "--- $($_.Name)"; Get-Content $_.FullName
+            }
+            "- Organizar $kind`: $(if ($process.ExitCode -eq 0) { 'OK' } else { "FALLO (código $($process.ExitCode))" })" >> $env:GITHUB_STEP_SUMMARY
+            if ($process.ExitCode -ne 0) { $failed += $kind }
+          }
+          if ($failed) { throw "Organizar falló en: $($failed -join ', ')" }
 
       - name: Empaquetar, tamaño y SHA-256
         id: hash
