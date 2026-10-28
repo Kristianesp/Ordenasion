@@ -25,12 +25,14 @@ from qfluentwidgets import (
 )
 from qfluentwidgets.common.style_sheet import styleSheetManager
 
-from src.gui.v2.components import ThemeTitleBarButton
+from src.gui.task_center import task_registry
+from src.gui.v2.components import FolderDropFilter, ThemeTitleBarButton
 from src.gui.v2.pages.activity_page import ActivityPage
 from src.gui.v2.pages.home_page import HomePage
 from src.gui.v2.pages.organize_page import OrganizePage
 from src.gui.v2.pages.settings_page import SettingsPage
 from src.gui.v2.startup_splash import branding_icon
+from src.gui.v2.task_feedback import TaskFeedback
 from src.gui.v2.theme import (
     OceanBackdrop,
     apply_control_sizes,
@@ -179,6 +181,8 @@ class FluentAppWindow(FluentWindow):
         self._apply_shell_styles()
         self._connect_controller()
         self._setup_shortcuts()
+        self._setup_folder_drops()
+        self.task_feedback = TaskFeedback(self, task_registry)
         hints = QGuiApplication.styleHints()
         scheme_changed = getattr(hints, "colorSchemeChanged", None)
         if scheme_changed is not None:  # Qt >= 6.5
@@ -188,6 +192,7 @@ class FluentAppWindow(FluentWindow):
         self.legacy_window.refresh_fluent_appearance = self._refresh_theme
 
         self.legacy_window.hide()
+        self._restore_last_page()
         QTimer.singleShot(0, self._adapt_navigation)
         # Inicio muestra la ocupación sin construir la página Discos.
         QTimer.singleShot(0, self._load_disk_snapshot)
@@ -215,6 +220,7 @@ class FluentAppWindow(FluentWindow):
         space.result_changed.connect(lambda _result: self._refresh_home_dashboard())
         space.scan_state_changed.connect(home.set_space_scan_active)
         space.organize_requested.connect(self._analyze_from_home)
+        FolderDropFilter(space, self._scan_space_folder)
         self._legacy_pages["disks"] = page
         return page
 
@@ -297,8 +303,37 @@ class FluentAppWindow(FluentWindow):
             return widget.page
         return widget
 
+    LAST_PAGE_KEY = "interface.last_page"
+
+    def _restore_last_page(self) -> None:
+        """Abre la última página visitada (las pesadas se construyen después)."""
+        route = str(self.config.get(self.LAST_PAGE_KEY, "home") or "home")
+        if route in self._routes and route != "home":
+            self.switchTo(self._routes[route])
+
+    def _remember_page(self, widget) -> None:
+        route = widget.objectName() if widget is not None else ""
+        if route in self._routes and route != self.config.get(self.LAST_PAGE_KEY):
+            self.config.set(self.LAST_PAGE_KEY, route)
+
+    def _setup_folder_drops(self) -> None:
+        """Arrastrar una carpeta a Inicio u Organizar la analiza."""
+        home = self._routes["home"]
+        self._drop_filters = [
+            FolderDropFilter(home, self._analyze_from_home),
+            FolderDropFilter(self._routes["organize"], self._analyze_from_home),
+        ]
+
+    def _scan_space_folder(self, path: str) -> None:
+        """Arrastrar una carpeta a Uso del espacio la mide."""
+        disks = self.page("disks")
+        disks.set_disk_view("space")
+        disks.space_page.path_input.setText(path)
+        disks.space_page.start_scan()
+
     def _on_current_page_changed(self, index: int) -> None:
         widget = self.stackedWidget.widget(index)
+        self._remember_page(widget)
         if isinstance(widget, LazyPage) and not widget.is_built:
             # Clic en la navegación: se ve el marcador y la página llega en
             # la siguiente vuelta del bucle de eventos.
@@ -772,6 +807,7 @@ class FluentAppWindow(FluentWindow):
             event.ignore()
             return
         self._closing = True
+        self.task_feedback.shutdown()
         self._cleanup_theme_transition()
         if self.legacy_window.disk_viewer is not None:
             self.legacy_window.disk_viewer.shutdown()

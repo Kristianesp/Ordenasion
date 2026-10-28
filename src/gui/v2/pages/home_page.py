@@ -3,9 +3,11 @@
 from pathlib import Path
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, ComboBox, FluentIcon, LineEdit, PrimaryPushButton, PushButton, ScrollArea, SubtitleLabel
+from qfluentwidgets import (BodyLabel, ComboBox, FluentIcon, LineEdit, PrimaryPushButton, PushButton, ScrollArea,
+                            SubtitleLabel, TransparentToolButton)
 from src.gui.task_center import task_registry
-from src.gui.v2.components import ActionBar, GlassCard, MetricCard, PageHeader
+from src.gui.v2.components import ActionBar, EmptyState, GlassCard, MetricCard, PageHeader
+from src.utils.paths import open_in_file_manager
 from src.gui.v2.dashboard_charts import DiskUsageChart, FolderSizeChart, disk_values, usage_percent_of
 from src.gui.v2.space_map import format_bytes
 from src.gui.v2.theme import ElidedPathLabel, set_themed_stylesheet, typography_scale
@@ -140,9 +142,21 @@ class HomePage(ScrollArea):
         disk.addWidget(self.open_disks_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.space_card, space = self._card("Qué ocupa espacio")
+        path_row = QHBoxLayout()
         self.space_path_label = ElidedPathLabel("")
         self.space_path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        space.addWidget(self.space_path_label)
+        path_row.addWidget(self.space_path_label, 1)
+        self.open_space_folder_button = TransparentToolButton(FluentIcon.FOLDER)
+        self.open_space_folder_button.setToolTip("Abrir en el Explorador")
+        self.open_space_folder_button.setAccessibleName("Abrir la carpeta analizada en el Explorador")
+        self.open_space_folder_button.clicked.connect(self._open_space_folder)
+        path_row.addWidget(self.open_space_folder_button)
+        space.addLayout(path_row)
+        self.space_empty_state = EmptyState(
+            FluentIcon.PIE_SINGLE, "Analiza una carpeta para ver qué ocupa más espacio.", "Analizar espacio",
+            primary=False)
+        self.space_empty_state.action_requested.connect(lambda: self.navigate_requested.emit("space"))
+        space.addWidget(self.space_empty_state)
         self.folders_chart = FolderSizeChart(self.config)
         space.addWidget(self.folders_chart)
         self.space_snapshot_label = BodyLabel("")
@@ -227,7 +241,7 @@ class HomePage(ScrollArea):
                 for card in cards:
                     grid.removeWidget(card)
                 for index, card in enumerate(cards):
-                    grid.addWidget(card, index // chart_columns, index % chart_columns)
+                    grid.addWidget(card, index // chart_columns, index % chart_columns, Qt.AlignmentFlag.AlignTop)
                 grid.setColumnStretch(0, 1)
                 grid.setColumnStretch(1, 1 if chart_columns == 2 else 0)
             self._chart_columns = chart_columns
@@ -294,6 +308,10 @@ class HomePage(ScrollArea):
             self.space_metric.setToolTip(f"{space_result.root_path}\n{root.size:,} bytes lógicos")
             self.space_path_label.set_path(space_result.root_path)
             self.space_path_label.show()
+            self.open_space_folder_button.show()
+            self.space_empty_state.hide()
+            self.folders_chart.show()
+            self.open_space_button.show()
             self.space_snapshot_label.setText("Análisis parcial: hay entradas sin leer." if root.status == "partial" else "Cinco elementos mayores y el resto · tamaño lógico por ruta.")
             self.space_snapshot_label.show()
             self.open_space_button.setText("Ver análisis de espacio")
@@ -302,9 +320,18 @@ class HomePage(ScrollArea):
             self.space_metric.set_value("—", "Sin análisis de espacio")
             self.space_path_label.set_path("")
             self.space_path_label.hide()
+            self.open_space_folder_button.hide()
             self.space_snapshot_label.setText("")
             self.space_snapshot_label.hide()
+            # Estado vacío con su acción en lugar del gráfico sin datos
+            self.space_empty_state.show()
+            self.folders_chart.hide()
+            self.open_space_button.hide()
             self.open_space_button.setText("Analizar espacio")
+
+    def _open_space_folder(self):
+        if self._space_result is not None:
+            open_in_file_manager(self._space_result.root_path)
 
     def _update_drive(self, *_):
         index = self.drive_selector.currentIndex()

@@ -1,6 +1,6 @@
 """Componentes compartidos de la interfaz Fluent 2.0."""
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF
+from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal, QRectF
 from PyQt6.QtGui import QPainter, QLinearGradient, QPen
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import (
@@ -283,3 +283,50 @@ class ShortcutsDialog(MessageBoxBase):
         self.yesButton.setText("Cerrar")
         self.cancelButton.hide()
         self.widget.setMinimumWidth(420)
+
+
+def local_folder_from_mime(mime) -> str | None:
+    """Primera carpeta local de un arrastre (None si no hay ninguna)."""
+    from pathlib import Path
+
+    if mime is None or not mime.hasUrls():
+        return None
+    for url in mime.urls():
+        if url.isLocalFile():
+            path = Path(url.toLocalFile())
+            if path.is_dir():
+                return str(path)
+    return None
+
+
+class FolderDropFilter(QObject):
+    """Acepta carpetas locales arrastradas sobre una página y llama a ``callback``.
+
+    Se instala en la página y, si es un área de desplazamiento, en su
+    viewport (que es quien recibe los eventos de arrastre).
+    """
+
+    def __init__(self, target: QWidget, callback, parent=None):
+        super().__init__(parent or target)
+        self._callback = callback
+        self.targets = [target]
+        viewport = getattr(target, "viewport", None)
+        if callable(viewport) and viewport() is not None:
+            self.targets.append(viewport())
+        for widget in self.targets:
+            widget.setAcceptDrops(True)
+            widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+            if local_folder_from_mime(event.mimeData()):
+                event.acceptProposedAction()
+                return True
+        elif kind == QEvent.Type.Drop:
+            folder = local_folder_from_mime(event.mimeData())
+            if folder:
+                event.acceptProposedAction()
+                self._callback(folder)
+                return True
+        return super().eventFilter(obj, event)

@@ -31,6 +31,7 @@ class AppConfig:
             "accent_color": "#0078D4",
             "density": "comfortable",
             "ui_advanced_mode": False,
+            "last_page": "home",  # última página visitada (se restaura al abrir)
         },
         "categories": {"auto_save": True, "backup_enabled": True},
         "analysis": {
