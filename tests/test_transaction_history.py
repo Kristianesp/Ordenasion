@@ -81,6 +81,25 @@ def test_overwrite_backup_is_restored_on_rollback(tmp_path):
     assert not backup.exists()
 
 
+def test_overwrite_backups_can_be_sent_to_trash(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    trashed = []
+    monkeypatch.setitem(sys.modules, "send2trash", types.SimpleNamespace(send2trash=trashed.append))
+    root = tmp_path / "root"
+    root.mkdir()
+    existing = root / "a.txt"
+    existing.write_text("original", encoding="utf-8")
+    manager = TransactionManager(str(tmp_path / "ops.jsonl"))
+    txn = manager.begin_transaction("sobrescribir")
+    backup = root / ".a.overwrite.txt"
+    assert manager.safe_move_file(existing, backup, role=ROLE_OVERWRITE_BACKUP)
+    manager.end_transaction()
+    assert manager.discard_overwrite_backups(txn) == 1
+    assert trashed == [str(backup)]
+
+
 def test_safe_move_refuses_to_overwrite(tmp_path):
     manager = TransactionManager(str(tmp_path / "ops.jsonl"))
     source = tmp_path / "a.txt"

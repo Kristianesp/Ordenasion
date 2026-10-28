@@ -46,6 +46,7 @@ from .organization_plan import (
     ACTION_SKIP,
     OrganizationPlan,
     build_organization_plan,
+    folder_key,
     known_category_folder_names,
 )
 
@@ -103,7 +104,7 @@ class AnalysisWorker(QThread):
             folder_names = set(category_manager.get_category_folder_names())
         else:
             folder_names = known_category_folder_names(list((categories or {}).keys()))
-        folder_names |= {os.path.normcase(name) for name in (excluded_folder_names or [])}
+        folder_names |= {folder_key(name) for name in (excluded_folder_names or [])}
         self.category_folder_names = folder_names
         self.hash_manager = HashManager()
         self.is_running = True
@@ -210,7 +211,7 @@ class AnalysisWorker(QThread):
                         f"🚫 Excluyendo carpeta del sistema: {folder.name}"
                     )
                     continue
-                if os.path.normcase(folder.name) in self.category_folder_names:
+                if folder_key(folder.name) in self.category_folder_names:
                     self.progress_update.emit(
                         f"📂 Carpeta de categoría existente (no se reorganiza): {folder.name}"
                     )

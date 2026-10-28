@@ -88,10 +88,13 @@ def test_reanalysis_skips_category_folders_and_single_varios(tmp_path):
     assert (root / VARIOS_FOLDER / "raro.zzz").exists()
     assert not (root / "VARIOS_REVISAR").exists()
     (root / "imagenes_lower").mkdir()
+    (root / "Documentos").mkdir()  # sin distinguir mayúsculas
+    (root / "Documentos" / "x.pdf").write_text("x", encoding="utf-8")
 
     second, _ = _analyze(root, manager)
     names = {mov["folder"].name for mov in second["folders"]}
     assert "IMAGENES" not in names and VARIOS_FOLDER not in names
+    assert "Documentos" not in names
     assert "imagenes_lower" in names
 
 

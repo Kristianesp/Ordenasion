@@ -133,6 +133,11 @@ class DirectoryListingCache:
         return os.path.normcase(path.name) in listing
 
 
+def folder_key(name: str) -> str:
+    """Clave para comparar nombres de carpeta sin distinguir mayúsculas."""
+    return os.path.normcase(str(name)).casefold()
+
+
 def known_category_folder_names(
     categories: Iterable[str],
     category_folder: Optional[Callable[[str], str]] = None,
@@ -144,7 +149,7 @@ def known_category_folder_names(
         folder = resolver(category)
         if folder:
             names.add(folder.split("/")[0])
-    return {os.path.normcase(name) for name in names}
+    return {folder_key(name) for name in names}
 
 
 def _file_mtime(movement: Dict, file_path: Path) -> Optional[float]:
@@ -210,7 +215,7 @@ def build_organization_plan(
             movement=mov,
         )
         is_category_folder = (
-            folder.parent == root and os.path.normcase(folder.name) in folder_names
+            folder.parent == root and folder_key(folder.name) in folder_names
         )
         if is_category_folder:
             item.action, item.status = ACTION_INVALID, STATUS_CATEGORY_FOLDER
