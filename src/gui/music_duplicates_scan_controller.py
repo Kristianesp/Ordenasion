@@ -24,6 +24,9 @@ def set_scan_busy(view: Any, busy: bool, message: str) -> None:
         view.scan_progress.setValue(0)
         view._scan_worker = None
     view.scan_status_label.setText(message)
+    cancel_btn = getattr(view, "cancel_scan_btn", None)
+    if cancel_btn is not None:
+        cancel_btn.setVisible(busy)
     controls = [
         view.scan_btn,
         view.online_lookup_btn,
@@ -61,6 +64,7 @@ def _start_scan_worker(
     view._scan_worker.progress.connect(view._on_scan_progress)
     view._scan_worker.finished_ok.connect(view._on_scan_finished)
     view._scan_worker.error_occurred.connect(view._on_scan_error)
+    view._scan_worker.cancelled.connect(lambda: on_scan_cancelled(view))
     view._scan_worker.start()
 
 
@@ -75,19 +79,19 @@ def scan_library(view: Any) -> None:
     if view._scan_worker is not None and view._scan_worker.isRunning():
         QMessageBox.information(
             view,
-            "Musica",
+            "Música",
             "Ya hay un escaneo musical en curso",
         )
         return
 
-    view.status_update.emit(f"🎵 Analizando musica en: {folder}")
+    view.status_update.emit(f"🎵 Analizando música en: {folder}")
     view.current_folder = folder
     view._persist_music_state()
     _start_scan_worker(
         view,
         folder,
         include_duplicates=True,
-        start_message=f"🎵 Iniciando analisis musical en: {folder}",
+        start_message=f"🎵 Iniciando análisis musical en: {folder}",
     )
 
 
@@ -113,8 +117,12 @@ def on_scan_finished(view: Any, payload: Dict[str, Any]) -> None:
     )
 
 
+def on_scan_cancelled(view: Any) -> None:
+    set_scan_busy(view, False, "⏹ Análisis musical cancelado. No se ha modificado ningún archivo.")
+
+
 def on_scan_error(view: Any, error: str) -> None:
-    set_scan_busy(view, False, f"❌ Error en analisis musical: {error}")
+    set_scan_busy(view, False, f"❌ Error en análisis musical: {error}")
 
 
 def refresh_from_current_folder(view: Any) -> None:

@@ -23,7 +23,7 @@ from src.gui.v2.theme import apply_dialog_surface
 VARIANT_TABLE_HEADERS = [
     "Fuente",
     "Confianza",
-    "Titulo",
+    "Título",
     "Artista",
     "Album",
     "Año",
@@ -94,12 +94,12 @@ def build_variant_details_text(
             f"Archivo: {file_name}",
             f"Confianza: {candidate.get('confidence', 0)}",
             f"Fuente: {candidate.get('source', result.get('source', 'unknown'))}",
-            f"Titulo: {suggested.get('title', '')}",
+            f"Título: {suggested.get('title', '')}",
             f"Artista: {suggested.get('artist', '')}",
             f"Album: {suggested.get('album', '')}",
             f"Año: {suggested.get('year', '')}",
             f"MBID: {candidate.get('mbid', '')}",
-            f"Diagnostico: {candidate.get('reason', result.get('reason', 'ok'))}",
+            f"Diagnóstico: {candidate.get('reason', result.get('reason', 'ok'))}",
             "Fingerprint: "
             f"{diagnostics.get('fingerprint_strategy', result.get('fingerprint_strategy', 'none'))}",
         ]

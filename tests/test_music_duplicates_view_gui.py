@@ -228,7 +228,7 @@ def test_library_side_controls_use_accessible_layout(monkeypatch):
     assert view.library_refresh_cache_btn.text() == "Refrescar cache"
     assert view.library_clear_cache_btn.text() == "Limpiar cache"
     assert view.library_cover_choice_btn.text() == "Elegir portada"
-    assert view.library_diagnostics_btn.text() == "Ver diagnostico"
+    assert view.library_diagnostics_btn.text() == "Ver diagnóstico"
     from src.gui.v2.theme import typography_scale
     from src.utils.app_config import AppConfig
     expected = typography_scale(AppConfig()).control_height
@@ -686,9 +686,9 @@ def test_lookup_finished_auto_applies_high_confidence_multi_candidate(
     assert prompted == []
     assert len(applied_calls) == 1
     assert applied_calls[0][1]["album"] == "Shadow Zone"
-    assert "Se ha seleccionado automaticamente" in view.lookup_status_label.text()
+    assert "Se ha seleccionado automáticamente" in view.lookup_status_label.text()
     assert view.music_toast_frame.isVisible() is True
-    assert "Se ha seleccionado automaticamente" in view.music_toast_label.text()
+    assert "Se ha seleccionado automáticamente" in view.music_toast_label.text()
     assert view.music_toast_frame.pos().x() > 0
 
     view.deleteLater()

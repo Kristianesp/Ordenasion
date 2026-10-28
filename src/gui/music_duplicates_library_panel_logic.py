@@ -73,7 +73,7 @@ def update_library_detail_panel(view: Any) -> None:
             "Selecciona una pista de la biblioteca para ver detalle local y sugerido."
         )
         view._set_cover_preview(view.library_cover_label, None)
-        view.library_player_hint.setText("Selecciona una pista para escucharla aqui.")
+        view.library_player_hint.setText("Selecciona una pista para escucharla aquí.")
         view._set_library_expected_duration(0)
         view.library_refresh_cache_btn.setEnabled(False)
         view.library_clear_cache_btn.setEnabled(False)
@@ -290,7 +290,7 @@ def on_audio_playback_state_changed(view: Any, state: Any) -> None:
                 )
         else:
             view.library_player_hint.setText(
-                "Selecciona una pista para escucharla aqui."
+                "Selecciona una pista para escucharla aquí."
             )
     elif view._audio_context != "library":
         view.library_play_btn.setText("Reproducir")
@@ -354,9 +354,9 @@ def stop_library_preview(view: Any) -> None:
         view.library_player_hint.setText(
             f"Lista para reproducir: {file_path.name}"
             if file_path is not None
-            else "Selecciona una pista para escucharla aqui."
+            else "Selecciona una pista para escucharla aquí."
         )
-        view.status_update.emit("⏹ Reproduccion detenida")
+        view.status_update.emit("⏹ Reproducción detenida")
 
 
 def seek_library_preview(view: Any, position: int) -> None:

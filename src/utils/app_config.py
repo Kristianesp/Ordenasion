@@ -44,7 +44,15 @@ class AppConfig:
             "recent_paths": [],
             "conflict_policy": "rename",
         },
-        "duplicates": {"ignored_hashes": [], "preferred_originals": {}},
+        "duplicates": {
+            "ignored_hashes": [],
+            "preferred_originals": {},
+            "default_method": "hybrid",
+            "keep_rule": "newest",
+            "preferred_folders": [],
+            "verify_bytes_before_delete": False,
+            "similar_images_threshold": 10,
+        },
         "audio": {
             "enabled": True,
             "library_roots": [],
@@ -63,6 +71,8 @@ class AppConfig:
             "duplicate_policy": "review",
             "organization_template": "MUSICA/{album_artist}/{year} - {album}/{disc_number}-{track_number} - {title}",
             "acoustid_api_key": "",
+            "duplicate_duration_tolerance": 2.0,
+            "local_chromaprint": True,
         },
         "health": {
             "temperature": {"cool_min": 40, "moderate": 65, "high": 75, "critical": 85},
