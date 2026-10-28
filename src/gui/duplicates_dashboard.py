@@ -50,7 +50,6 @@ from src.utils.constants import COLORS, UI_CONFIG
 from src.utils.app_config import AppConfig
 from src.utils.paths import user_data_file
 from src.core.duplicate_finder import DuplicateFinder, DuplicateScanWorker
-from src.core.hash_manager import HashCalculationWorker
 from src.core.transaction_manager import TransactionManager
 from src.gui.modern_components import TabHeaderWidget
 from src.gui.table_models import VirtualizedDuplicatesModel, PaginatedDuplicatesModel
