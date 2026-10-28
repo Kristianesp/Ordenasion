@@ -7,11 +7,10 @@ from unittest.mock import MagicMock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox, QTextEdit
+from PyQt6.QtWidgets import QApplication, QTextEdit
 
-from src.gui import main_window as module
 from src.gui import organize_controller
-from src.gui.main_window import FileOrganizerGUI
+from src.gui.v2.pages import organize_page as module
 from src.utils.app_config import AppConfig
 
 
@@ -24,43 +23,60 @@ def _app():
     return APP
 
 
-class _Line:
-    def __init__(self, text=""):
-        self._text = text
-
-    def text(self):
-        return self._text
-
-    def setText(self, text):
-        self._text = text
-
-
-def test_loading_profile_keeps_protected_paths_and_folder(tmp_path):
-    config = AppConfig(str(tmp_path / "config.json"))
-    config.set_protected_paths([str(tmp_path / "importante")])
-    profile = SimpleNamespace(
-        name="Descargas", folder_path="", move_folders=False, similarity_threshold=55,
-        organize_by_date=True, exclude_patterns=[str(tmp_path / "excluida")],
-    )
-    facade = SimpleNamespace(
-        profile_combo=SimpleNamespace(currentText=lambda: "Descargas"),
-        profile_manager=SimpleNamespace(get_profile=lambda _name: profile),
-        folder_input=_Line(str(tmp_path / "actual")),
-        move_folders_checkbox=MagicMock(), similarity_spinbox=MagicMock(),
-        organize_by_date_checkbox=MagicMock(), app_config=config,
-        log_message=MagicMock(), _profile_exclusions=[],
-    )
-    FileOrganizerGUI.load_selected_profile(facade)
-    assert config.get_protected_paths() == [str(tmp_path / "importante")]
-    assert facade.folder_input.text() == str(tmp_path / "actual")
-    assert facade._profile_exclusions == [str(tmp_path / "excluida")]
-
-
 def _controller(tmp_path):
     from src.core.transaction_manager import TransactionManager
     from src.gui.organize_controller import OrganizeController
 
     return OrganizeController(TransactionManager(str(tmp_path / "ops.jsonl")))
+
+
+class _Profiles:
+    """ProfileManager mínimo en memoria."""
+
+    def __init__(self, profiles=()):
+        self.profiles = {profile.name: profile for profile in profiles}
+
+    def get_profile_names(self):
+        return list(self.profiles)
+
+    def get_active_profile(self):
+        return None
+
+    def get_profile(self, name):
+        return self.profiles.get(name)
+
+
+def _page(tmp_path, controller=None, profiles=()):
+    """Página Organizar real con configuración, historial y categorías temporales."""
+    from src.core.category_manager import CategoryManager
+
+    _app()
+    config = AppConfig(str(tmp_path / "config.json"))
+    page = module.OrganizePage(config, controller or _controller(tmp_path),
+                               CategoryManager(str(tmp_path / "categories.json")), _Profiles(profiles))
+    # Sin análisis automático al escribir la ruta (temporizador de 1 s)
+    page.config.set_auto_analyze(False)
+    page._notify = MagicMock()
+    page._alert = MagicMock()
+    return page
+
+
+def test_loading_profile_keeps_protected_paths_and_folder(tmp_path):
+    profile = SimpleNamespace(
+        name="Descargas", folder_path="", move_folders=False, similarity_threshold=55,
+        organize_by_date=True, exclude_patterns=[str(tmp_path / "excluida")],
+    )
+    page = _page(tmp_path, profiles=[profile])
+    page.config.set_protected_paths([str(tmp_path / "importante")])
+    page.folder_input.setText(str(tmp_path / "actual"))
+    page.profile_combo.setCurrentText("Descargas")
+    page.load_selected_profile()
+    assert page.config.get_protected_paths() == [str(tmp_path / "importante")]
+    assert page.folder_input.text() == str(tmp_path / "actual")
+    assert page._profile_exclusions == [str(tmp_path / "excluida")]
+    assert not page.move_folders_checkbox.isChecked()
+    assert page.organize_by_date_checkbox.isChecked()
+    assert page.similarity_spinbox.value() == 55
 
 
 def test_log_messages_are_batched_and_counted_incrementally(tmp_path):
@@ -119,14 +135,14 @@ def test_close_asks_and_waits_for_running_organization(tmp_path, monkeypatch):
     worker = _FakeWorker()
     controller = _controller(tmp_path)
     controller.active_workers.append(worker)
-    facade = SimpleNamespace(controller=controller, _dialog_parent=lambda: None)
+    page = _page(tmp_path, controller)
 
-    monkeypatch.setattr(module.QMessageBox, "question", MagicMock(return_value=QMessageBox.StandardButton.No))
-    assert FileOrganizerGUI.request_shutdown(facade) is False
+    monkeypatch.setattr(page, "_ask", MagicMock(return_value=False))
+    assert page.request_shutdown() is False
     assert not worker.stopped
 
-    monkeypatch.setattr(module.QMessageBox, "question", MagicMock(return_value=QMessageBox.StandardButton.Yes))
-    assert FileOrganizerGUI.request_shutdown(facade) is True
+    monkeypatch.setattr(page, "_ask", MagicMock(return_value=True))
+    assert page.request_shutdown() is True
     assert worker.stopped and worker.waited
 
 
@@ -220,13 +236,19 @@ def test_rollback_transaction_runs_in_background(tmp_path, monkeypatch):
     monkeypatch.setattr(organize_controller.task_registry, "start_task", MagicMock())
     controller = _controller(tmp_path)
     controller.last_transaction_id = "txn_a"
-    facade = SimpleNamespace(controller=controller, rollback_btn=MagicMock(), organize_btn=MagicMock(),
-                             _dialog_parent=lambda: None)
-    assert FileOrganizerGUI.rollback_transaction(facade, "txn_b", confirm=False)
+    page = _page(tmp_path, controller)
+    ask = MagicMock(return_value=False)
+    monkeypatch.setattr(page, "_ask", ask)
+    # Con confirmación: si el usuario no acepta, no se deshace nada
+    assert not page.rollback_transaction("txn_a")
+    ask.assert_called_once()
+    assert page.rollback_transaction("txn_b", confirm=False)
     assert started == ["txn_b"]
     assert controller.current_rollback_task_id
+    assert not page.rollback_btn.isEnabled() and not page.organize_btn.isEnabled()
+    assert page.progress_panel.isVisibleTo(page) and not page.cancel_btn.isVisibleTo(page)
     # Mientras se deshace no se puede lanzar otra operación
-    assert not FileOrganizerGUI.rollback_transaction(facade, "txn_a", confirm=False)
+    assert not page.rollback_transaction("txn_a", confirm=False)
     assert not controller.start_rollback("txn_a")
 
 
@@ -248,3 +270,20 @@ def test_preview_tolerates_vanished_files_and_flags_category_folders(tmp_path):
     assert "No se moverán 2 elementos" in dialog.summary_label.text()
     assert dialog.get_plan().items[1].action == "missing"
     assert dialog.preview_model.rowCount() == 2
+
+
+def test_schedule_post_organization_refresh_triggers_analysis(tmp_path, monkeypatch):
+    page = _page(tmp_path)
+    page.folder_input.setText(str(tmp_path))
+    scheduled = {}
+    monkeypatch.setattr(module.QTimer, "singleShot",
+                        lambda delay, callback: scheduled.update(delay=delay, callback=callback))
+    page._schedule_post_organization_refresh()
+    assert scheduled["delay"] == 150
+    assert scheduled["callback"] == page.start_analysis
+    page.controller.flush_log()
+    assert page.controller.log_text().endswith("🔄 Refrescando resultados tras la organización...")
+    page.folder_input.setText(str(tmp_path / "ya-no-existe"))
+    scheduled.clear()
+    page._schedule_post_organization_refresh()
+    assert not scheduled

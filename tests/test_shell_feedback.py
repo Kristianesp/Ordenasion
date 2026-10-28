@@ -16,11 +16,9 @@ APP = QApplication.instance() or QApplication([])
 
 
 def _build(config):
-    from src.gui.main_window import FileOrganizerGUI
     from src.gui.v2.app_window import FluentAppWindow
 
-    legacy = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
-    window = FluentAppWindow(legacy)
+    window = FluentAppWindow(config)
     window.resize(1280, 720)
     window.show()
     QApplication.processEvents()
@@ -29,11 +27,11 @@ def _build(config):
 
 @pytest.fixture
 def shell(tmp_path):
-    from src.gui.main_window import FileOrganizerGUI
+    from src.gui.v2.app_window import FluentAppWindow
 
     app = APP
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(FileOrganizerGUI, "_init_disk_manager", lambda self: None)
+        patch.setattr(FluentAppWindow, "_init_disk_manager", lambda self: None)
         window = _build(AppConfig(str(tmp_path / "config.json")))
         yield window
         window.close()
@@ -105,7 +103,7 @@ def test_taskbar_progress_is_a_noop_outside_windows():
 
 def test_dropping_a_folder_on_home_or_organize_starts_analysis(shell, tmp_path, monkeypatch):
     analyze = MagicMock()
-    monkeypatch.setattr(shell.legacy_window, "analyze_folder", analyze)
+    monkeypatch.setattr(shell.organize_page, "analyze_folder", analyze)
     folder = tmp_path / "Descargas"
     folder.mkdir()
     event = _drop(shell._routes["home"].viewport(), folder)
@@ -131,12 +129,12 @@ def test_dropping_a_folder_on_space_usage_scans_it(shell, tmp_path, monkeypatch)
 
 
 def test_last_visited_page_is_restored(tmp_path):
-    from src.gui.main_window import FileOrganizerGUI
+    from src.gui.v2.app_window import FluentAppWindow
 
     app = APP
     config_path = str(tmp_path / "config.json")
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(FileOrganizerGUI, "_init_disk_manager", lambda self: None)
+        patch.setattr(FluentAppWindow, "_init_disk_manager", lambda self: None)
         first = _build(AppConfig(config_path))
         first._switch_route("activity")
         first.close()
@@ -146,3 +144,16 @@ def test_last_visited_page_is_restored(tmp_path):
         assert second.stackedWidget.currentWidget() is second._routes["activity"]
         second.close()
         app.processEvents()
+
+
+def test_badge_stays_hidden_after_theme_change(shell):
+    from src.gui.task_center import task_registry
+
+    task_registry.start_task("badge", "Prueba")
+    task_registry.finish_task("badge", "Completada")
+    badge = shell.task_feedback.badge
+    assert badge is not None and badge.isHidden()
+    shell.set_theme_mode("dark" if shell.config.get_theme_mode() != "dark" else "light")
+    shell._cleanup_theme_transition()
+    QApplication.processEvents()
+    assert badge.isHidden()

@@ -1,8 +1,10 @@
 """Shell principal Fluent 2.0.
 
-La ventana depende del ``OrganizeController`` (estado, historial, deshacer y
-registro) y de la vista de Organizar; las herramientas pesadas (Discos,
-Música y Duplicados) se construyen la primera vez que se abren.
+La ventana recibe una única ``AppConfig`` y el ``OrganizeController``
+(estado, workers, historial, deshacer y registro). Todas las páginas son
+propias: Inicio, Organizar, Actividad y Configuración se crean al arrancar;
+las herramientas pesadas (Discos, Música y Duplicados) se construyen la
+primera vez que se abren, con las fábricas ``create_*`` de esta ventana.
 """
 
 import os
@@ -25,8 +27,11 @@ from qfluentwidgets import (
 )
 from qfluentwidgets.common.style_sheet import styleSheetManager
 
+from src.core.application_state import app_state as default_app_state
+from src.core.organization_profiles import ProfileManager
+from src.gui.organize_controller import OrganizeController
 from src.gui.task_center import task_registry
-from src.gui.v2.components import FolderDropFilter, ThemeTitleBarButton
+from src.gui.v2.components import PAGE_VIEWPORT_QSS, FolderDropFilter, ThemeTitleBarButton, page_content_qss
 from src.gui.v2.pages.activity_page import ActivityPage
 from src.gui.v2.pages.home_page import HomePage
 from src.gui.v2.pages.organize_page import OrganizePage
@@ -45,6 +50,7 @@ from src.gui.v2.theme import (
     theme_signature,
     typography_scale,
 )
+from src.utils.app_config import AppConfig, set_app_config
 from src.utils.version import APP_NAME, APP_VERSION
 
 # Clases cuya paleta sigue al tema (superficies que pintan su fondo).
@@ -54,6 +60,8 @@ _PALETTE_CLASSES = frozenset({
 })
 _FIELD_CLASSES = frozenset({"LineEdit", "ComboBox", "SpinBox", "SearchLineEdit", "DoubleSpinBox"})
 _BUTTON_CLASSES = frozenset({"PushButton", "PrimaryPushButton"})
+# Casillas Fluent: solo la escala tipográfica (el color lo pone qfluentwidgets)
+_CHECK_CLASSES = frozenset({"CheckBox"})
 
 
 def _set_qss(widget: QWidget, qss: str) -> None:
@@ -69,6 +77,11 @@ def _field_qss(class_name: str, tokens, metrics) -> str:
         f"padding: 0 {metrics.padding_x}px; text-align: left; font-size: {metrics.body}px; }} "
         f"{class_name}:focus {{ border-color: {tokens.accent}; }}"
     )
+
+
+def _check_qss(class_name: str, _tokens, metrics) -> str:
+    family = f'font-family: "{metrics.family}"; ' if metrics.family else ""
+    return f"{class_name} {{ font-size: {metrics.body}px; {family}}}"
 
 
 def _button_qss(class_name: str, tokens, metrics) -> str:
@@ -139,11 +152,24 @@ def resolve_page(page):
 class FluentAppWindow(FluentWindow):
     """Ventana V2 con navegación lateral y páginas propias."""
 
-    def __init__(self, legacy_window, parent=None):
+    def __init__(self, config: AppConfig, controller: OrganizeController | None = None, parent=None, *,
+                 category_manager=None, profile_manager: ProfileManager | None = None, app_state=None):
         super().__init__(parent)
-        self.legacy_window = legacy_window
-        self.controller = legacy_window.controller
-        self.config = legacy_window.app_config
+        # Una única configuración en todo el proceso: las vistas y servicios
+        # que no la reciben inyectada usan esta (get_app_config()).
+        self.config = config
+        self.app_config = config
+        set_app_config(config)
+        self._app_state = app_state or default_app_state
+        self.controller = controller or OrganizeController(parent=self)
+        self.category_manager = (category_manager or getattr(self._app_state, "category_manager", None)
+                                 or self._new_category_manager())
+        self.profile_manager = profile_manager or ProfileManager()
+        self.disk_manager = None
+        self.disk_viewer = None
+        self.music_duplicates_view = None
+        self.duplicates_dashboard = None
+        self._disk_manager_ready = False
         self._routes: dict[str, QWidget] = {}
         self._legacy_pages: dict[str, QWidget] = {}
         self._theme_transition_active = False
@@ -163,6 +189,9 @@ class FluentAppWindow(FluentWindow):
         self.navigationInterface.setMinimumExpandWidth(1200)
         self.navigationInterface.setExpandWidth(200)
         apply_fluent_theme(self.config)
+        # La hoja del shell antes de crear las páginas: aplicarla después
+        # repule todo el árbol ya construido (cientos de widgets).
+        _set_qss(self, fluent_window_stylesheet(self.config))
 
         self._build_navigation()
         self._backdrop = OceanBackdrop(self.config, self)
@@ -188,14 +217,100 @@ class FluentAppWindow(FluentWindow):
         if scheme_changed is not None:  # Qt >= 6.5
             scheme_changed.connect(self._on_system_color_scheme_changed)
         self.stackedWidget.currentChanged.connect(self._on_current_page_changed)
-        # El modal reutilizado solicita un refresco Fluent al guardar fuente.
-        self.legacy_window.refresh_fluent_appearance = self._refresh_theme
+        # Última red de seguridad: nunca destruir un QThread en marcha al salir
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.controller.shutdown_workers)
 
-        self.legacy_window.hide()
         self._restore_last_page()
         QTimer.singleShot(0, self._adapt_navigation)
         # Inicio muestra la ocupación sin construir la página Discos.
         QTimer.singleShot(0, self._load_disk_snapshot)
+
+    @staticmethod
+    def _new_category_manager():
+        from src.core.category_manager import CategoryManager
+
+        return CategoryManager()
+
+    @property
+    def organize_page(self):
+        return self._routes["organize"]
+
+    def refresh_fluent_appearance(self) -> None:
+        """Lo usa el diálogo de configuración al aplicar un tamaño de texto."""
+        self._refresh_theme()
+
+    def log_message(self, message) -> None:
+        self.controller.log(message)
+
+    # ------------------------------------------------------------ discos
+    def _init_disk_manager(self):
+        """Obtiene el DiskManager compartido (sin enumerar unidades)."""
+        self._disk_manager_ready = True
+        try:
+            self.disk_manager = self._app_state.get_disk_manager()
+        except Exception as exc:  # El resto de la aplicación debe seguir
+            self.log_message(f"⚠️ No se pudo inicializar el gestor de discos: {exc}")
+            self.disk_manager = None
+            return None
+        if self.disk_manager is None:
+            self.log_message("⚠️ No se pudo inicializar el gestor de discos")
+        return self.disk_manager
+
+    def _ensure_disk_manager(self):
+        if not self._disk_manager_ready:
+            self._init_disk_manager()
+        return self.disk_manager
+
+    # ------------------------------------------------------- herramientas
+    def create_disk_viewer(self):
+        """Visor de Discos (se crea una vez, al abrir su página)."""
+        if self.disk_viewer is None:
+            from src.gui.disk_viewer import DiskViewer
+
+            self.disk_viewer = DiskViewer(disk_manager=None, app_config=self.config)
+            self.disk_viewer.disk_selected.connect(self.on_disk_selected_for_organize)
+            manager = self._ensure_disk_manager()
+            if manager is not None:
+                self.disk_viewer.disk_manager = manager
+                self.disk_viewer.refresh_disks()
+        return self.disk_viewer
+
+    def create_music_view(self):
+        """Vista de Música (se crea una vez, al abrir su página)."""
+        if self.music_duplicates_view is None:
+            from src.gui.music_duplicates_view import MusicDuplicatesView
+
+            self.music_duplicates_view = MusicDuplicatesView(app_config=self.config)
+            self.music_duplicates_view.status_update.connect(self.log_message)
+            self._apply_audio_visibility()
+        return self.music_duplicates_view
+
+    def create_duplicates_dashboard(self):
+        """Panel de Duplicados (se crea una vez, al abrir su página)."""
+        if self.duplicates_dashboard is None:
+            from src.gui.duplicates_dashboard import DuplicatesDashboard
+
+            self.duplicates_dashboard = DuplicatesDashboard()
+            self.duplicates_dashboard.tab_header.config_requested.connect(
+                lambda: self.organize_page.open_configuration())
+            self.duplicates_dashboard.tab_header.tasks_requested.connect(lambda: self._switch_route("activity"))
+            self.duplicates_dashboard.status_update.connect(self.log_message)
+        return self.duplicates_dashboard
+
+    def _apply_audio_visibility(self) -> None:
+        """Música se habilita según la configuración de audio."""
+        if self.music_duplicates_view is not None:
+            self.music_duplicates_view.setEnabled(bool(self.config.get_audio_enabled()))
+
+    def on_disk_selected_for_organize(self, disk_path: str) -> None:
+        """Analiza la unidad elegida en Discos."""
+        self._switch_route("organize")
+        page = self.organize_page
+        page.set_folder(disk_path)
+        self.log_message(f"💾 Unidad seleccionada para organizar: {disk_path}")
+        QTimer.singleShot(2000, page.start_analysis)
 
     # ------------------------------------------------------------ páginas
     def _prepare_legacy_widget(self, widget: QWidget) -> QWidget:
@@ -211,9 +326,8 @@ class FluentAppWindow(FluentWindow):
     def _create_disks_page(self):
         from src.gui.v2.pages.feature_pages import DisksPage
 
-        viewer = self._prepare_legacy_widget(self.legacy_window.create_disk_viewer())
+        viewer = self._prepare_legacy_widget(self.create_disk_viewer())
         page = DisksPage(viewer, self.config)
-        viewer.disk_selected.connect(lambda _path: self._switch_route("organize"))
         viewer.disks_refreshed.connect(lambda _disks: self._refresh_home_dashboard())
         home = self._routes["home"]
         space = page.space_page
@@ -227,31 +341,31 @@ class FluentAppWindow(FluentWindow):
     def _create_music_page(self):
         from src.gui.v2.pages.feature_pages import MusicPage
 
-        page = MusicPage(self._prepare_legacy_widget(self.legacy_window.create_music_view()), self.config)
+        page = MusicPage(self._prepare_legacy_widget(self.create_music_view()), self.config)
         self._legacy_pages["music"] = page
         return page
 
     def _create_duplicates_page(self):
         from src.gui.v2.pages.feature_pages import DuplicatesPage
 
-        page = DuplicatesPage(self._prepare_legacy_widget(self.legacy_window.create_duplicates_dashboard()),
+        page = DuplicatesPage(self._prepare_legacy_widget(self.create_duplicates_dashboard()),
                               self.config)
         self._legacy_pages["duplicates"] = page
         return page
 
     def _build_navigation(self) -> None:
-        home = HomePage(self.config, self.legacy_window.profile_manager)
+        home = HomePage(self.config, self.profile_manager)
         self._add_route("home", home, FluentIcon.HOME, "Inicio")
         home.navigate_requested.connect(self._switch_route)
         home.analyze_requested.connect(self._analyze_from_home)
         home.result_requested.connect(self._show_last_result)
-        home.undo_requested.connect(self.legacy_window.rollback_last_operation)
         self.controller.operation_state_changed.connect(lambda: home.update_operation(self.controller))
         home.update_operation(self.controller)
 
-        organize = OrganizePage(self.legacy_window.organize_widget, self.config, self.legacy_window)
+        organize = OrganizePage(self.config, self.controller, self.category_manager, self.profile_manager)
         organize.activity_requested.connect(lambda: self._switch_route("activity"))
-        self._legacy_pages["organize"] = organize
+        organize.configuration_changed.connect(self._on_configuration_changed)
+        home.undo_requested.connect(organize.rollback_last_operation)
         self._add_route("organize", organize, FluentIcon.FOLDER, "Organizar")
 
         for route, factory, icon, title in (
@@ -263,16 +377,20 @@ class FluentAppWindow(FluentWindow):
             lazy.built.connect(self._on_lazy_page_built)
             self._add_route(route, lazy, icon, title)
 
-        activity = ActivityPage(self.controller, undo_handler=self.legacy_window.rollback_transaction)
+        activity = ActivityPage(self.controller, undo_handler=organize.rollback_transaction)
         self._add_route("activity", activity, FluentIcon.SYNC, "Actividad")
 
         settings = SettingsPage(self.config)
-        settings.advanced_settings_requested.connect(self.legacy_window.open_configuration)
+        settings.advanced_settings_requested.connect(lambda: organize.open_configuration())
         settings.theme_changed.connect(self._refresh_theme)
         settings.theme_mode_selected.connect(self.set_theme_mode)
         self._add_route("settings", settings, FluentIcon.SETTING, "Configuración", NavigationItemPosition.BOTTOM)
 
         self.switchTo(self._routes["home"])
+
+    def _on_configuration_changed(self) -> None:
+        self.category_manager = self.organize_page.category_manager
+        self._apply_audio_visibility()
 
     def _add_route(self, route: str, page: QWidget, icon, title: str,
                    position: NavigationItemPosition = NavigationItemPosition.TOP) -> None:
@@ -359,7 +477,7 @@ class FluentAppWindow(FluentWindow):
         """Lee las unidades (rápido, sin SMART) para Inicio si Discos no existe aún."""
         if self.built_page("disks") is not None or self._closing:
             return
-        manager = getattr(self.legacy_window, "disk_manager", None)
+        manager = self._ensure_disk_manager()
         if manager is None:
             return
         try:
@@ -372,7 +490,7 @@ class FluentAppWindow(FluentWindow):
     def _refresh_home_dashboard(self) -> None:
         disks_page = self.built_page("disks")
         if disks_page is not None:
-            viewer = self.legacy_window.disk_viewer
+            viewer = self.disk_viewer
             disks = viewer.available_disks
             manager = viewer.disk_manager
             if not disks and viewer.disks_updated_at is None and manager is not None:
@@ -394,6 +512,7 @@ class FluentAppWindow(FluentWindow):
             self._style_page(page)
         self._backdrop.update()
         self._routes["home"].refresh_theme()
+        self._routes["organize"].refresh_theme()
         self._update_theme_button()
 
     def _style_chrome(self, tokens) -> None:
@@ -484,13 +603,13 @@ class FluentAppWindow(FluentWindow):
         content = getattr(page, "widget", lambda: None)()
         if viewport is not None:
             viewport.setAutoFillBackground(False)
-            _set_qss(viewport, "QWidget#qt_scrollarea_viewport { background-color: transparent; }")
+            _set_qss(viewport, PAGE_VIEWPORT_QSS)
         if content is not None:
             apply_fluent_palette(content, self.config)
             content.setAutoFillBackground(False)
             # Sin color: el texto lo resuelve el QSS de la ventana y así la
             # hoja no cambia con el tema (cada setStyleSheet repule el subárbol).
-            _set_qss(content, f"QWidget#{content.objectName()} {{ background-color: transparent; }}")
+            _set_qss(content, page_content_qss(content))
 
         for widget in page.findChildren(QWidget):
             class_name = widget.__class__.__name__
@@ -498,7 +617,7 @@ class FluentAppWindow(FluentWindow):
                 widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
                 apply_fluent_palette(widget, self.config)
                 widget.setAutoFillBackground(False)
-            elif class_name in _FIELD_CLASSES or class_name in _BUTTON_CLASSES:
+            elif class_name in _FIELD_CLASSES or class_name in _BUTTON_CLASSES or class_name in _CHECK_CLASSES:
                 if restyle_controls:
                     self._style_control(widget, class_name, light, dark, metrics, qss_cache)
                 elif widget not in styleSheetManager.widgets:
@@ -526,7 +645,10 @@ class FluentAppWindow(FluentWindow):
 
     @staticmethod
     def _control_qss(class_name, light, dark, metrics) -> tuple[str, str]:
-        builder = _button_qss if class_name in _BUTTON_CLASSES else _field_qss
+        if class_name in _CHECK_CLASSES:
+            builder = _check_qss
+        else:
+            builder = _button_qss if class_name in _BUTTON_CLASSES else _field_qss
         return builder(class_name, light, metrics), builder(class_name, dark, metrics)
 
     def _style_control(self, control, class_name, light, dark, metrics, cache) -> None:
@@ -667,6 +789,13 @@ class FluentAppWindow(FluentWindow):
         settings = self._routes.get("settings")
         if settings is not None:
             settings.sync_theme_selector()
+        self._sync_task_badge()
+
+    def _sync_task_badge(self) -> None:
+        """qfluentwidgets vuelve a mostrar la insignia oculta al repintar la navegación."""
+        feedback = getattr(self, "task_feedback", None)
+        if feedback is not None:
+            feedback.refresh()
 
     # ------------------------------------------------------------ atajos
     NAVIGATION_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
@@ -686,22 +815,22 @@ class FluentAppWindow(FluentWindow):
         ] + [(seq, text) for seq, _, text in self.NAVIGATION_SHORTCUTS]
 
     def _action_shortcuts(self):
-        legacy = self.legacy_window
+        organize = self._routes["organize"]
         return (
-            ("Ctrl+O", "Elegir carpeta para organizar", lambda: self._on_organize(legacy.browse_folder)),
-            ("F5", "Analizar la carpeta actual", lambda: self._on_organize(legacy.start_analysis)),
-            ("Ctrl+R", "Analizar la carpeta actual", lambda: self._on_organize(legacy.start_analysis)),
-            ("Ctrl+S", "Revisar y organizar la selección", lambda: self._on_organize(legacy.start_organization)),
+            ("Ctrl+O", "Elegir carpeta para organizar", lambda: self._on_organize(organize.browse_folder)),
+            ("F5", "Analizar la carpeta actual", lambda: self._on_organize(organize.start_analysis)),
+            ("Ctrl+R", "Analizar la carpeta actual", lambda: self._on_organize(organize.start_analysis)),
+            ("Ctrl+S", "Revisar y organizar la selección", lambda: self._on_organize(organize.start_organization)),
             ("Ctrl+F", "Buscar en los resultados", self._focus_search),
             ("Ctrl+L", "Limpiar el registro", lambda: self._routes["activity"].clear_log()),
-            ("Ctrl+P", "Configuración avanzada", legacy.open_configuration),
+            ("Ctrl+P", "Configuración avanzada", lambda: organize.open_configuration()),
             ("Ctrl+,", "Configuración", lambda: self._switch_route("settings")),
             ("F1", "Mostrar esta ayuda", self.show_shortcuts_help),
             ("Ctrl+Q", "Salir", self.close),
         )
 
     def _setup_shortcuts(self) -> None:
-        # Los atajos viven en el shell (la ventana heredada está oculta).
+        # Todos los atajos viven en el shell; los de Organizar llaman a su página.
         self._shortcuts: dict[str, QShortcut] = {}
         for sequence, _text, callback in self._action_shortcuts():
             shortcut = QShortcut(QKeySequence(sequence), self)
@@ -715,8 +844,8 @@ class FluentAppWindow(FluentWindow):
         # Marcar/desmarcar solo dentro de Organizar: Ctrl+A sigue
         # seleccionando texto en los campos (ShortcutOverride del QLineEdit).
         organize = self._routes["organize"]
-        for sequence, callback in (("Ctrl+A", self.legacy_window.select_all_items),
-                                   ("Ctrl+D", self.legacy_window.deselect_all_items)):
+        for sequence, callback in (("Ctrl+A", organize.select_all_items),
+                                   ("Ctrl+D", organize.deselect_all_items)):
             shortcut = QShortcut(QKeySequence(sequence), organize)
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.activated.connect(callback)
@@ -727,10 +856,14 @@ class FluentAppWindow(FluentWindow):
         action()
 
     def _focus_search(self) -> None:
-        if self.stackedWidget.currentWidget() is self._routes.get("organize"):
-            search = self.legacy_window.filter_bar.search_input
-            search.setFocus(Qt.FocusReason.ShortcutFocusReason)
-            search.selectAll()
+        organize = self._routes.get("organize")
+        if self.stackedWidget.currentWidget() is organize:
+            # Sin resultados la búsqueda está oculta: se enfoca la ruta
+            target = organize.filter_bar.search_input
+            if not organize.filter_bar.isVisible():
+                target = organize.folder_input
+            target.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            target.selectAll()
             return
         self._switch_route("duplicates")
 
@@ -747,6 +880,7 @@ class FluentAppWindow(FluentWindow):
             self.navigationInterface.expand(useAni=False)
         else:
             self.navigationInterface.panel.collapse()
+        self._sync_task_badge()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -790,26 +924,33 @@ class FluentAppWindow(FluentWindow):
         transaction_id = summary.get("transaction_id")
         undo = None
         if transaction_id and not summary.get("undone"):
-            undo = lambda: self.legacy_window.rollback_transaction(transaction_id, confirm=False)
+            undo = lambda: self._routes["organize"].rollback_transaction(transaction_id, confirm=False)
         OperationSummaryDialog(summary, self, undo_callback=undo).exec()
 
     def _analyze_from_home(self, path: str) -> None:
         self._switch_route("organize")
-        self.legacy_window.analyze_folder(path)
+        self._routes["organize"].analyze_folder(path)
 
     # -------------------------------------------------------------- cierre
     def closeEvent(self, event) -> None:
+        """Cierre ordenado: nunca se destruye un hilo en marcha."""
         disks = self.built_page("disks")
         if disks is not None and disks.request_shutdown(self.close):
             event.ignore()
             return
-        if not self.legacy_window.request_shutdown():
+        if not self._routes["organize"].request_shutdown():
             event.ignore()
             return
         self._closing = True
         self.task_feedback.shutdown()
         self._cleanup_theme_transition()
-        if self.legacy_window.disk_viewer is not None:
-            self.legacy_window.disk_viewer.shutdown()
-        self.legacy_window.close()
+        if self.disk_viewer is not None:
+            self.disk_viewer.shutdown()
+        cleanup = getattr(self._app_state, "cleanup", None)
+        if callable(cleanup):
+            try:
+                cleanup()
+            except (RuntimeError, OSError) as exc:
+                self.log_message(f"⚠️ Error durante la limpieza del estado: {exc}")
+        self.controller.flush_log()
         super().closeEvent(event)

@@ -1,25 +1,35 @@
 #!/usr/bin/env python3
 """
-Dialogo de Preview para el Organizador de Archivos
-Muestra una vista previa de los cambios antes de organizar
+Revisión de la organización (vista previa) antes de mover nada.
 
 La vista previa calcula el ``OrganizationPlan`` que después ejecuta el
 worker tal cual (``get_plan()``), de modo que ambos no pueden divergir.
+Diálogo con controles Fluent y los tokens V2 (claro u oscuro).
 """
+
+import os
 
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
-    QLabel,
-    QTableView,
     QHeaderView,
-    QGroupBox,
+    QWidget,
 )
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PyQt6.QtGui import QColor
-from qfluentwidgets import CheckBox, ComboBox, PrimaryPushButton, PushButton
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    CheckBox,
+    ComboBox,
+    FluentIcon,
+    PrimaryPushButton,
+    PushButton,
+    TableView,
+    TitleLabel,
+)
 
 from src.gui.v2.theme import apply_dialog_surface, current_tokens
 from src.core.organization_conflicts import (
@@ -36,7 +46,9 @@ from src.core.organization_plan import (
 )
 
 PREVIEW_HEADERS = ["Tipo", "Nombre", "Destino", "Ruta final", "Estado"]
-_ROW_KEYS = ("type", "name", "destination_label", "destination_path", "status")
+# La ruta final se muestra relativa a la carpeta de origen (la completa, en el tooltip)
+_ROW_KEYS = ("type", "name", "destination_label", "destination_display", "status")
+_TOOLTIP_KEYS = ("type", "name", "destination_label", "destination_path", "status")
 
 
 class PreviewTableModel(QAbstractTableModel):
@@ -74,8 +86,11 @@ class PreviewTableModel(QAbstractTableModel):
         if not index.isValid():
             return None
         row = self._rows[index.row()]
-        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
-            return row[_ROW_KEYS[index.column()]]
+        if role == Qt.ItemDataRole.DisplayRole:
+            key = _ROW_KEYS[index.column()]
+            return row.get(key, row.get(_TOOLTIP_KEYS[index.column()]))
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return row[_TOOLTIP_KEYS[index.column()]]
         if role == Qt.ItemDataRole.ForegroundRole and index.column() == 4:
             if row["status"] != STATUS_NO_CONFLICT:
                 return self._warning_color
@@ -116,34 +131,41 @@ class PreviewDialog(QDialog):
 
     def _setup_ui(self):
         self.setWindowTitle("Revisar y organizar")
-        self.resize(900, 600)
-        self.setMinimumSize(640, 440)
+        self.resize(960, 620)
+        self.setMinimumSize(680, 460)
         self.setModal(True)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 20, 24, 20)
 
-        # Header informativo
-        header = QLabel("Vista Previa de Cambios")
+        header = TitleLabel("Revisar y organizar")
         header.setObjectName("preview_header")
         layout.addWidget(header)
+        intro = CaptionLabel("Comprueba adónde irá cada elemento. Nada se mueve hasta que confirmes.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
 
         # Resumen
         self.preview_rows = []
         self.conflict_count = 0
-        summary = QLabel("")
+        summary = BodyLabel("")
         self.summary_label = summary
         summary.setObjectName("preview_summary")
         summary.setWordWrap(True)
+        summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(summary)
 
-        # Resolución de conflictos
-        self.conflict_box = QGroupBox("Resolución de conflictos")
+        # Resolución de conflictos (solo si hay conflictos en el plan)
+        self.conflict_box = QWidget()
+        self.conflict_box.setObjectName("preview_conflicts")
         conflict_layout = QHBoxLayout(self.conflict_box)
-        conflict_layout.setContentsMargins(12, 12, 12, 12)
-        conflict_layout.addWidget(QLabel("Si el destino ya existe:"))
+        conflict_layout.setContentsMargins(0, 0, 0, 0)
+        conflict_layout.setSpacing(12)
+        conflict_layout.addWidget(BodyLabel("Si el destino ya existe:"))
         self.conflict_policy_combo = ComboBox()
+        self.conflict_policy_combo.setAccessibleName("Resolución de conflictos")
+        self.conflict_policy_combo.setMinimumWidth(280)
         for label, policy in (
             ("Mantener ambos (renombrar)", CONFLICT_POLICY_RENAME),
             ("Sobrescribir archivo existente", CONFLICT_POLICY_OVERWRITE),
@@ -159,46 +181,54 @@ class PreviewDialog(QDialog):
         self.conflict_policy_combo.currentIndexChanged.connect(
             lambda *_args: self._refresh_preview()
         )
-        conflict_layout.addWidget(self.conflict_policy_combo, 1)
+        conflict_layout.addWidget(self.conflict_policy_combo)
+        conflict_layout.addStretch()
         layout.addWidget(self.conflict_box)
 
         # Tabla de preview (modelo: se rellena de una vez)
         self.preview_model = PreviewTableModel(self)
-        self.preview_table = QTableView()
+        self.preview_table = TableView()
+        self.preview_table.setObjectName("preview_table")
+        self.preview_table.setAccessibleName("Elementos que se van a organizar")
         self.preview_table.setModel(self.preview_model)
+        self.preview_table.setBorderVisible(True)
+        self.preview_table.setBorderRadius(8)
+        self.preview_table.setWordWrap(False)
+        self.preview_table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.preview_table.verticalHeader().setVisible(False)
+        self.preview_table.verticalHeader().setDefaultSectionSize(34)
         header_view = self.preview_table.horizontalHeader()
-        header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header_view.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        # La tabla Fluent reserva 16 px a cada lado del texto
+        self.preview_table.setColumnWidth(0, 104)
         self.preview_table.setColumnWidth(1, 240)
-        self.preview_table.setColumnWidth(4, 220)
-        self.preview_table.setAlternatingRowColors(True)
+        self.preview_table.setColumnWidth(2, 156)
+        self.preview_table.setColumnWidth(4, 200)
         self.preview_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.preview_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
         # Llenar tabla
         self._refresh_preview()
-        layout.addWidget(self.preview_table)
+        layout.addWidget(self.preview_table, 1)
 
-        # Checkbox de confirmacion
+        # Confirmación y botones: una sola fila
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
         self.confirm_checkbox = CheckBox(
             "Confirmo que quiero proceder con la organización"
         )
-        layout.addWidget(self.confirm_checkbox)
-
-        # Botones
-        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(self.confirm_checkbox)
+        btn_layout.addStretch()
 
         self.cancel_btn = PushButton("Cancelar")
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.cancel_btn)
 
-        btn_layout.addStretch()
-
-        self.confirm_btn = PrimaryPushButton("Confirmar y organizar")
+        self.confirm_btn = PrimaryPushButton(FluentIcon.ACCEPT, "Confirmar y organizar")
         self.confirm_btn.setEnabled(False)
         self.confirm_btn.clicked.connect(self.accept)
         btn_layout.addWidget(self.confirm_btn)
@@ -291,12 +321,22 @@ class PreviewDialog(QDialog):
                 "name": f"{item.source.name} ({self._format_size(item.size)})",
                 "destination_label": item.category,
                 "destination_path": str(item.destination),
+                "destination_display": self._relative(item.destination),
                 "status": item.status,
             }
             for item in self.plan.items
         ]
 
+    def _relative(self, path) -> str:
+        """Ruta final relativa a la carpeta de origen (o completa si está fuera)."""
+        try:
+            relative = os.path.relpath(str(path), str(self.folder_path))
+        except ValueError:  # otra unidad en Windows
+            return str(path)
+        return str(path) if relative.startswith("..") else relative
+
     def _apply_theme(self):
         self.setObjectName("fluentPreviewDialog")
         tokens = apply_dialog_surface(self)
         self.preview_model.set_warning_color(tokens.warning)
+        self.preview_table.setCheckedColor(tokens.accent, tokens.accent)

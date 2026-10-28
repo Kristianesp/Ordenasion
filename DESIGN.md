@@ -1,6 +1,8 @@
 # DESIGN.md — Sistema de Diseño Ordenasion
 
 Sistema visual único para toda la aplicación (shell Fluent V2 + páginas legacy).
+Inicio, Organizar, Actividad y Configuración son páginas Fluent nativas; Discos,
+Música y Duplicados siguen dentro de `LegacyPage` con el puente de estilos.
 Fuente de verdad: `src/gui/v2/theme.py` (tokens Python) y `design-tokens.json` (export).
 
 ## 1. Principios
@@ -112,6 +114,10 @@ fuera de la escala.
 - **Botón primario**: relleno accent sólido, texto negro o blanco según contraste, radio 8, sin sombra de color.
 - **Botón secundario**: `surface_alt` + stroke, mismo radio/altura.
 - **Botón destructivo**: relleno danger, reservado para borrar/eliminar.
+- **Diálogos**: `QDialog` con `apply_dialog_surface` (tokens V2, misma altura de
+  control que el shell, grupos como tarjetas) o `MessageBoxBase` para preguntas,
+  avisos bloqueantes y peticiones de texto (`ask`, `alert`, `TextPromptDialog`);
+  los avisos no bloqueantes son `InfoBar` (`notify`).
 
 Estados obligatorios: hover (superficie + borde accent), pressed (superficie o
 variación de luminosidad del accent sin mover el control), focus (borde de alto

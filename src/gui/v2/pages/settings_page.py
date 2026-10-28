@@ -24,7 +24,7 @@ from qfluentwidgets import (
 )
 
 from src.core.duplicate_actions import KEEP_RULES
-from src.gui.v2.components import GlassCard, PageHeader
+from src.gui.v2.components import GlassCard, PageHeader, prepare_page_surface
 from src.gui.v2.theme import apply_fluent_theme
 from src.utils.app_config import AppConfig
 from src.utils.constants import DUPLICATE_METHODS
@@ -46,11 +46,11 @@ class SettingsPage(ScrollArea):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWidgetResizable(True)
         self.setFrameShape(ScrollArea.Shape.NoFrame)
-        self.enableTransparentBackground()
 
         self.content = QWidget()
         self.content.setObjectName("settingsContent")
         self.setWidget(self.content)
+        prepare_page_surface(self, self.content)
         self._build_ui()
         self._load_values()
 

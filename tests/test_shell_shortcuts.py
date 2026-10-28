@@ -12,16 +12,14 @@ from src.utils.app_config import AppConfig
 
 @pytest.fixture(scope="module")
 def shell(tmp_path_factory):
-    from src.gui.main_window import FileOrganizerGUI
     from src.gui.v2.app_window import FluentAppWindow
 
     app = QApplication.instance() or QApplication([])
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(FileOrganizerGUI, "_init_disk_manager", lambda self: None)
+        patch.setattr(FluentAppWindow, "_init_disk_manager", lambda self: None)
         config = AppConfig(str(tmp_path_factory.mktemp("shortcuts") / "config.json"))
         config.set_theme_mode("light")
-        legacy = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
-        window = FluentAppWindow(legacy)
+        window = FluentAppWindow(config)
         window.resize(1280, 720)
         window.show()
         window.activateWindow()
@@ -39,7 +37,7 @@ def _press(window, key, modifier=Qt.KeyboardModifier.NoModifier):
     QApplication.processEvents()
 
 
-def test_legacy_shortcuts_are_registered_on_the_shell(shell):
+def test_organize_shortcuts_are_registered_on_the_shell(shell):
     sequences = {sequence for sequence, _ in shell.shortcut_table()}
     for expected in ("Ctrl+O", "F5", "Ctrl+R", "Ctrl+S", "Ctrl+F", "Ctrl+L", "Ctrl+P", "Ctrl+Q", "F1", "Ctrl+1"):
         assert expected in sequences
@@ -48,30 +46,49 @@ def test_legacy_shortcuts_are_registered_on_the_shell(shell):
 
 def test_f5_navigates_to_organize_and_starts_analysis(shell, monkeypatch):
     start = MagicMock()
-    monkeypatch.setattr(shell.legacy_window, "start_analysis", start)
+    monkeypatch.setattr(shell.organize_page, "start_analysis", start)
     shell._switch_route("home")
     _press(shell, Qt.Key.Key_F5)
     start.assert_called_once()
     assert shell.stackedWidget.currentWidget() is shell._routes["organize"]
 
 
-def test_ctrl_shortcuts_trigger_legacy_actions(shell, monkeypatch):
-    browse, organize = MagicMock(), MagicMock()
-    monkeypatch.setattr(shell.legacy_window, "browse_folder", browse)
-    monkeypatch.setattr(shell.legacy_window, "start_organization", organize)
+def test_ctrl_shortcuts_trigger_organize_actions(shell, monkeypatch):
+    browse, organize, configure = MagicMock(), MagicMock(), MagicMock()
+    monkeypatch.setattr(shell.organize_page, "browse_folder", browse)
+    monkeypatch.setattr(shell.organize_page, "start_organization", organize)
+    monkeypatch.setattr(shell.organize_page, "open_configuration", configure)
     _press(shell, Qt.Key.Key_O, Qt.KeyboardModifier.ControlModifier)
     _press(shell, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    _press(shell, Qt.Key.Key_P, Qt.KeyboardModifier.ControlModifier)
     browse.assert_called_once()
     organize.assert_called_once()
+    configure.assert_called_once()
     _press(shell, Qt.Key.Key_3, Qt.KeyboardModifier.ControlModifier)
     assert shell.stackedWidget.currentWidget() is shell._routes["disks"]
 
 
 def test_ctrl_f_focuses_organize_search(shell):
+    page = shell.organize_page
     shell._switch_route("organize")
     QApplication.processEvents()
+    # Sin resultados la búsqueda está oculta: se enfoca la ruta de origen
     _press(shell, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
-    assert shell.legacy_window.filter_bar.search_input.hasFocus()
+    assert page.folder_input.hasFocus()
+    page.movements_model.update_data([{"type": "file_group", "element": "2 archivos sueltos",
+                                       "category": "TEXTOS", "group_files": [], "is_group": True}])
+    page.update_selection_count()
+    QApplication.processEvents()
+    _press(shell, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+    assert page.filter_bar.search_input.hasFocus()
+    # Ctrl+A / Ctrl+D marcan y desmarcan dentro de Organizar
+    page.movements_table.setFocus()
+    _press(shell, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    assert page.movements_model.get_checked_rows() == [0]
+    _press(shell, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    assert page.movements_model.get_checked_rows() == []
+    page.movements_model.clear_data()
+    page.update_selection_count()
 
 
 def test_f1_shows_shortcuts_help(shell, monkeypatch):
@@ -151,8 +168,8 @@ def test_last_result_offers_undo(shell, monkeypatch):
     monkeypatch.setattr(module.OperationSummaryDialog, "__init__", fake_init)
     monkeypatch.setattr(module.OperationSummaryDialog, "exec", lambda self: 0)
     rollback = MagicMock(return_value=True)
-    monkeypatch.setattr(shell.legacy_window, "rollback_transaction", rollback)
-    monkeypatch.setattr(shell.legacy_window, "last_operation_summary",
+    monkeypatch.setattr(shell.organize_page, "rollback_transaction", rollback)
+    monkeypatch.setattr(shell.controller, "last_operation_summary",
                         {"transaction_id": "txn-1", "files_moved": 2, "folders_moved": 0})
     shell._show_last_result()
     captured["undo"]()
@@ -161,34 +178,31 @@ def test_last_result_offers_undo(shell, monkeypatch):
 
 def test_space_organize_request_starts_analysis(shell, monkeypatch):
     start = MagicMock()
-    monkeypatch.setattr(shell.legacy_window, "start_analysis", start)
+    monkeypatch.setattr(shell.organize_page, "start_analysis", start)
     shell.page("disks").space_page.organize_requested.emit("/tmp")
     start.assert_called_once()
-    assert shell.legacy_window.folder_input.text() == "/tmp"
+    assert shell.organize_page.folder_input.text() == "/tmp"
 
 
-def test_close_asks_legacy_shutdown_first(shell, monkeypatch):
-    monkeypatch.setattr(shell.legacy_window, "request_shutdown", lambda confirm=True: False)
+def test_close_asks_organize_shutdown_first(shell, monkeypatch):
+    monkeypatch.setattr(shell.organize_page, "request_shutdown", lambda confirm=True: False)
     shutdown = MagicMock()
-    monkeypatch.setattr(shell.legacy_window.disk_viewer, "shutdown", shutdown)
+    monkeypatch.setattr(shell.disk_viewer, "shutdown", shutdown)
     shell.close()
     assert shell.isVisible()
     shutdown.assert_not_called()
 
 
 def test_heavy_pages_are_built_on_first_navigation(tmp_path):
-    from src.gui.main_window import FileOrganizerGUI
     from src.gui.v2.app_window import FluentAppWindow, LazyPage
 
     app = QApplication.instance()
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(FileOrganizerGUI, "_init_disk_manager", lambda self: None)
+        patch.setattr(FluentAppWindow, "_init_disk_manager", lambda self: None)
         config = AppConfig(str(tmp_path / "config.json"))
-        legacy = FileOrganizerGUI(app_config_ref=config, fluent_mode=True)
-        assert legacy.main_tabs is None
-        assert legacy.disk_viewer is None and legacy.music_duplicates_view is None
-        assert legacy.duplicates_dashboard is None
-        window = FluentAppWindow(legacy)
+        window = FluentAppWindow(config)
+        assert window.disk_viewer is None and window.music_duplicates_view is None
+        assert window.duplicates_dashboard is None
         window.resize(1280, 720)
         window.show()
         app.processEvents()
@@ -200,11 +214,11 @@ def test_heavy_pages_are_built_on_first_navigation(tmp_path):
         assert window.built_page("music") is None
         QTest.qWait(50)
         assert window.built_page("music") is not None
-        assert legacy.music_duplicates_view is not None
+        assert window.music_duplicates_view is not None
         # Navegación programática: construcción inmediata
         window._switch_route("space")
         assert window.built_page("disks").space_page.isVisible()
-        assert legacy.disk_viewer is not None
+        assert window.disk_viewer is not None
         assert window.built_page("duplicates") is None
         window.close()
         app.processEvents()

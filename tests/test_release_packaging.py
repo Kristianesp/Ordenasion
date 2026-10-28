@@ -40,6 +40,14 @@ def test_release_version_and_spec_use_fluent_assets_without_private_data():
     args, options = calls["analysis"]
     assert args[0] == [str(ROOT / "main_fluent.py")]
     assert "PyQt6.QtMultimedia" in options["hiddenimports"]
+    # Módulos de interfaz importados bajo demanda; la ventana heredada ya no existe
+    assert {"src.gui.v2.pages.organize_page", "src.gui.config_dialog",
+            "src.gui.disk_viewer"} <= set(options["hiddenimports"])
+    assert not any("main_window" in name for name in options["hiddenimports"])
+    for module in options["hiddenimports"]:
+        if module.startswith("src."):
+            relative = Path(*module.split("."))
+            assert (ROOT / relative).with_suffix(".py").is_file() or (ROOT / relative).is_dir(), module
     assert calls["exe"]["name"] == EXECUTABLE_NAME and not calls["exe"]["console"]
     assert "collect_all(" not in spec
     packaged_binaries = {Path(entry[0]).name.lower() for entry in calls["exe_args"][2]}
@@ -65,7 +73,7 @@ def test_source_release_smoke_preserves_caller_config_and_exits_cleanly(tmp_path
     assert process.returncode == 0, result.get("error", process.stderr)
     assert result["version"] == APP_VERSION and result["status"] == "ok"
     assert all(result["assets"].values()) and result["qt_multimedia"]
-    assert result["first_frame"] and result["graceful_close"]
+    assert result["first_frame"] and result["graceful_close"] and result["disposed"]
     assert config.read_bytes() == content
     assert Path(result["temporary_cwd"]) != tmp_path
 
