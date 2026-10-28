@@ -20,13 +20,16 @@ class HashCache:
     Esto puede acelerar análisis repetidos entre 10x y 50x.
     """
 
-    def __init__(self, db_path: str = "hash_cache.db"):
+    def __init__(self, db_path: Optional[str] = None):
         """
         Inicializa el sistema de caché
 
         Args:
             db_path: Ruta del archivo de base de datos SQLite
         """
+        if db_path is None:
+            from src.utils.paths import user_data_file
+            db_path = user_data_file("hash_cache.db")
         self.db_path = Path(db_path)
         self.lock = threading.Lock()  # Para acceso thread-safe
         self._create_tables()

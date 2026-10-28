@@ -122,7 +122,10 @@ class AudioMetadataService:
         "genre",
     }
 
-    def __init__(self, db_path: str = "media_index.db"):
+    def __init__(self, db_path: Optional[str] = None):
+        if db_path is None:
+            from src.utils.paths import user_data_file
+            db_path = user_data_file("media_index.db")
         self.db_path = Path(db_path)
         self.lock = threading.RLock()
         self._ensure_schema()

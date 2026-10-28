@@ -48,6 +48,7 @@ from PyQt6.QtGui import QFont, QIcon, QPixmap, QColor, QAction, QPainter
 
 from src.utils.constants import COLORS, UI_CONFIG
 from src.utils.app_config import AppConfig
+from src.utils.paths import user_data_file
 from src.core.duplicate_finder import DuplicateFinder, DuplicateScanWorker
 from src.core.hash_manager import HashCalculationWorker
 from src.core.transaction_manager import TransactionManager
@@ -209,7 +210,7 @@ class DuplicatesDashboard(QWidget):
         self.duplicate_finder = None
         self.current_method = "fast"  # Por defecto método rápido
         self.current_folder = None
-        self.transaction_manager = TransactionManager("duplicate_operations_log.json")
+        self.transaction_manager = TransactionManager(str(user_data_file("duplicate_operations_log.json")))
         self.app_config = AppConfig()
         self.ignored_hashes = set(self.app_config.get_ignored_duplicate_hashes())
         self.preferred_originals = self.app_config.get_preferred_originals()

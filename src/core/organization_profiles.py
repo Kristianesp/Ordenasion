@@ -85,7 +85,10 @@ class OrganizationProfile:
 class ProfileManager:
     """Gestor de perfiles de organizacion"""
     
-    def __init__(self, profiles_file: str = "organization_profiles.json"):
+    def __init__(self, profiles_file: Optional[str] = None):
+        if profiles_file is None:
+            from src.utils.paths import user_data_file
+            profiles_file = str(user_data_file("organization_profiles.json"))
         self.profiles_file = profiles_file
         self.profiles: List[OrganizationProfile] = []
         self.active_profile: Optional[str] = None

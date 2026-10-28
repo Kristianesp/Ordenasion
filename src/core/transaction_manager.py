@@ -32,13 +32,16 @@ class TransactionManager:
     en caso de error o por petición del usuario.
     """
 
-    def __init__(self, log_file: str = "operations_log.json"):
+    def __init__(self, log_file: Optional[str] = None):
         """
         Inicializa el gestor de transacciones
 
         Args:
             log_file: Archivo donde se registran las operaciones
         """
+        if log_file is None:
+            from src.utils.paths import user_data_file
+            log_file = user_data_file("operations_log.json")
         self.log_file = Path(log_file)
         self.current_transaction: Optional[str] = None
         self.operations: List[Dict[str, Any]] = []

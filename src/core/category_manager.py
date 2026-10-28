@@ -45,7 +45,10 @@ class CategoryRule:
 class CategoryManager:
     """Gestor principal de categorías y extensiones"""
 
-    def __init__(self, config_file: str = "categories_config.json"):
+    def __init__(self, config_file: Optional[str] = None):
+        if config_file is None:
+            from src.utils.paths import user_data_file
+            config_file = str(user_data_file("categories_config.json"))
         self.config_file = config_file
         self.categories = CATEGORIAS.copy()
         self.ext_to_categoria = self._create_reverse_index()

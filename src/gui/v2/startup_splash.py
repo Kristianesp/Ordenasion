@@ -31,9 +31,12 @@ def startup_font_family():
     return _STARTUP_FONT_FAMILY
 
 
-def startup_theme_mode(config_path="app_config.json"):
+def startup_theme_mode(config_path=None):
     """Lee únicamente apariencia; no crea ni modifica configuración."""
     try:
+        if config_path is None:
+            from src.utils.paths import user_data_file
+            config_path = user_data_file("app_config.json")
         interface = json.loads(Path(config_path).read_text(encoding="utf-8")).get("interface", {})
         mode = str(interface.get("theme_mode", "system")).lower()
         if mode in {"light", "dark", "system"}:

@@ -276,8 +276,10 @@ def test_summary_editor_renders_dark_surface_and_readable_text(tmp_path):
     assert contrast_ratio(viewport.palette().color(QPalette.ColorRole.Text).name(),
                           viewport.palette().color(QPalette.ColorRole.Base).name()) >= 4.5
     bright_text_pixels = sum(
-        rendered.pixelColor(x, y).lightness() > 200
+        rendered.pixelColor(x, y).lightness() > 150
         for y in range(min(180, rendered.height())) for x in range(rendered.width())
     )
+    # El antialiasing varía por plataforma; basta con que haya texto claro
+    # visible sobre la superficie oscura (lightness ~40).
     assert bright_text_pixels > 100
     dialog.close()

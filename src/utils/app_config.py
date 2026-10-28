@@ -76,7 +76,10 @@ class AppConfig:
         },
     }
 
-    def __init__(self, config_file: str = "app_config.json"):
+    def __init__(self, config_file: Optional[str] = None):
+        if config_file is None:
+            from src.utils.paths import user_data_file
+            config_file = user_data_file("app_config.json")
         self.config_file = Path(config_file)
         self.config = self.load_config()
 

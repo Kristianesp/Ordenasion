@@ -45,6 +45,7 @@ from PyQt6.QtWidgets import (
     QScrollBar,
 )
 
+from src.utils.paths import user_data_file
 from src.core.audio_fingerprint import audio_fingerprint_service
 from src.core.audio_index import audio_metadata_service
 from src.core.transaction_manager import TransactionManager
@@ -195,7 +196,7 @@ class MusicDuplicatesView(QWidget):
         self._toast_hide_timer.setSingleShot(True)
         self._toast_hide_timer.timeout.connect(self._start_hide_music_toast)
         self.transaction_manager = TransactionManager(
-            "audio_duplicate_operations_log.json"
+            str(user_data_file("audio_duplicate_operations_log.json"))
         )
         self.audio_output = QAudioOutput(self)
         self.audio_output.setVolume(0.75)
